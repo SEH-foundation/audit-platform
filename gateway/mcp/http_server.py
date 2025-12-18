@@ -3136,6 +3136,11 @@ async def homepage(request):
     except:
         rates_data = REGIONAL_RATES
 
+    # Build profiles and contracts options
+    profiles_options = "".join(f'<option value="{pid}">{p["name"]} ({p["region"]})</option>' for pid, p in PROFILES.items())
+    contracts_options = "".join(f'<option value="{cid}">{c["name"]}</option>' for cid, c in CONTRACTS.items())
+    templates_options = "".join(f'<option value="{tid}">{tid.replace("_", " ").title()}</option>' for tid in DOCUMENT_TEMPLATES.keys())
+
     return HTMLResponse(f'''
 <!DOCTYPE html>
 <html lang="en">
@@ -3150,7 +3155,7 @@ async def homepage(request):
         /* Navigation */
         .nav {{ background: #1f2937; padding: 0 20px; display: flex; align-items: center; }}
         .nav-brand {{ color: white; font-size: 18px; font-weight: 600; padding: 15px 0; }}
-        .nav-tabs {{ display: flex; margin-left: 40px; }}
+        .nav-tabs {{ display: flex; margin-left: 40px; flex-wrap: wrap; }}
         .nav-tab {{ color: #9ca3af; padding: 15px 20px; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.2s; }}
         .nav-tab:hover {{ color: white; }}
         .nav-tab.active {{ color: white; border-bottom-color: #3b82f6; }}
@@ -3241,8 +3246,11 @@ async def homepage(request):
         <div class="nav-brand">MCP Audit Server</div>
         <div class="nav-tabs">
             <div class="nav-tab active" data-tab="dashboard">Dashboard</div>
+            <div class="nav-tab" data-tab="audit">Audit</div>
+            <div class="nav-tab" data-tab="documents">Documents</div>
+            <div class="nav-tab" data-tab="reports">Reports</div>
             <div class="nav-tab" data-tab="settings">Settings</div>
-            <div class="nav-tab" data-tab="docs">Documentation</div>
+            <div class="nav-tab" data-tab="docs">Docs</div>
         </div>
     </nav>
 
@@ -3306,6 +3314,266 @@ async def homepage(request):
                 <div class="endpoint">
                     <span class="endpoint-url">{SERVER_URL}</span>
                     <button class="btn btn-secondary" onclick="navigator.clipboard.writeText('{SERVER_URL}')">Copy</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- AUDIT TAB -->
+        <div id="audit" class="tab-content">
+            <div class="grid-2">
+                <div class="card">
+                    <h2>Cost Estimation</h2>
+                    <div class="form-group">
+                        <label class="form-label">Lines of Code (LOC)</label>
+                        <input type="number" class="form-input" id="audit-loc" value="10000" min="100">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Profile</label>
+                        <select class="form-input" id="audit-profile">
+                            {profiles_options}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Complexity</label>
+                        <select class="form-input" id="audit-complexity">
+                            <option value="S">S - Small (&lt;160h)</option>
+                            <option value="M" selected>M - Medium (160-500h)</option>
+                            <option value="L">L - Large (500-1200h)</option>
+                            <option value="XL">XL - Extra Large (&gt;1200h)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Tech Debt Multiplier</label>
+                        <input type="number" class="form-input" id="audit-debt" value="1.0" step="0.1" min="1.0" max="2.0">
+                    </div>
+                    <button class="btn btn-primary" onclick="runEstimation()">Calculate Estimate</button>
+                    <div id="estimation-result" style="margin-top: 16px;"></div>
+                </div>
+
+                <div class="card">
+                    <h2>Repository Health Score</h2>
+                    <p style="margin-bottom: 16px; color: #6b7280;">Rate each metric from 0-3</p>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Documentation</label>
+                            <input type="number" class="form-input score-input" id="health-doc" value="2" min="0" max="3">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Structure</label>
+                            <input type="number" class="form-input score-input" id="health-struct" value="2" min="0" max="3">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Runability</label>
+                            <input type="number" class="form-input score-input" id="health-run" value="2" min="0" max="3">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Commit History</label>
+                            <input type="number" class="form-input score-input" id="health-hist" value="2" min="0" max="3">
+                        </div>
+                    </div>
+                    <h3>Tech Debt Score</h3>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Architecture</label>
+                            <input type="number" class="form-input score-input" id="debt-arch" value="2" min="0" max="3">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Code Quality</label>
+                            <input type="number" class="form-input score-input" id="debt-quality" value="2" min="0" max="3">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Testing</label>
+                            <input type="number" class="form-input score-input" id="debt-test" value="2" min="0" max="3">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Infrastructure</label>
+                            <input type="number" class="form-input score-input" id="debt-infra" value="2" min="0" max="3">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Security</label>
+                            <input type="number" class="form-input score-input" id="debt-sec" value="2" min="0" max="3">
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" onclick="calculateScores()">Calculate Scores</button>
+                    <button class="btn btn-secondary" onclick="checkReadiness()">Check Readiness</button>
+                    <div id="scores-result" style="margin-top: 16px;"></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Compliance Check</h2>
+                <div class="grid-3">
+                    <div class="form-group">
+                        <label class="form-label">Contract Type</label>
+                        <select class="form-input" id="compliance-contract">
+                            {contracts_options}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Documentation Score</label>
+                        <input type="number" class="form-input" id="comp-doc" value="2" min="0" max="3">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Security Score</label>
+                        <input type="number" class="form-input" id="comp-sec" value="2" min="0" max="3">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Testing Score</label>
+                        <input type="number" class="form-input" id="comp-test" value="2" min="0" max="3">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Infrastructure Score</label>
+                        <input type="number" class="form-input" id="comp-infra" value="2" min="0" max="3">
+                    </div>
+                </div>
+                <button class="btn btn-primary" onclick="checkCompliance()">Check Compliance</button>
+                <div id="compliance-result" style="margin-top: 16px;"></div>
+            </div>
+
+            <div class="card">
+                <h2>Scoring Rubrics</h2>
+                <div class="form-group">
+                    <label class="form-label">Select Metric</label>
+                    <select class="form-input" id="rubric-metric" onchange="loadRubric()">
+                        <option value="">-- Select --</option>
+                        <option value="documentation">Documentation</option>
+                        <option value="structure">Structure</option>
+                        <option value="runability">Runability</option>
+                        <option value="history">Commit History</option>
+                        <option value="architecture">Architecture</option>
+                        <option value="code_quality">Code Quality</option>
+                        <option value="testing">Testing</option>
+                        <option value="infrastructure">Infrastructure</option>
+                        <option value="security">Security</option>
+                    </select>
+                </div>
+                <div id="rubric-display"></div>
+            </div>
+        </div>
+
+        <!-- DOCUMENTS TAB -->
+        <div id="documents" class="tab-content">
+            <div class="grid-2">
+                <div class="card">
+                    <h2>Upload Document</h2>
+                    <div class="form-group">
+                        <label class="form-label">Document Type</label>
+                        <select class="form-input" id="doc-type">
+                            <option value="contract">Contract</option>
+                            <option value="policy">Policy</option>
+                            <option value="requirements">Requirements (TZ)</option>
+                            <option value="specification">Specification</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Document Name</label>
+                        <input type="text" class="form-input" id="doc-name" placeholder="e.g., Global Fund R13 Contract">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Content</label>
+                        <textarea class="form-input" id="doc-content" rows="8" placeholder="Paste document content here..."></textarea>
+                    </div>
+                    <button class="btn btn-primary" onclick="uploadDocument()">Upload Document</button>
+                </div>
+
+                <div class="card">
+                    <h2>Loaded Policies</h2>
+                    <div id="policies-list">
+                        <p style="color: #6b7280;">Loading policies...</p>
+                    </div>
+                    <button class="btn btn-secondary" onclick="loadPolicies()" style="margin-top: 16px;">Refresh List</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Available Profiles</h2>
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Profile</th>
+                            <th>Region</th>
+                            <th>Currency</th>
+                            <th>Junior</th>
+                            <th>Middle</th>
+                            <th>Senior</th>
+                            <th>Requirements</th>
+                        </tr>
+                    </thead>
+                    <tbody id="profiles-table">
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="card">
+                <h2>Contract Compliance Requirements</h2>
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Contract</th>
+                            <th>Standards</th>
+                            <th>Requirements</th>
+                        </tr>
+                    </thead>
+                    <tbody id="contracts-table">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- REPORTS TAB -->
+        <div id="reports" class="tab-content">
+            <div class="grid-2">
+                <div class="card">
+                    <h2>Generate Document</h2>
+                    <div class="form-group">
+                        <label class="form-label">Template</label>
+                        <select class="form-input" id="report-template" onchange="loadTemplateVars()">
+                            {templates_options}
+                        </select>
+                    </div>
+                    <div id="template-vars-form"></div>
+                    <button class="btn btn-primary" onclick="generateDocument()">Generate Document</button>
+                </div>
+
+                <div class="card">
+                    <h2>Quick Acts</h2>
+                    <div class="form-group">
+                        <label class="form-label">Contractor Name</label>
+                        <input type="text" class="form-input" id="act-contractor" placeholder="Company Name">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Client Name</label>
+                        <input type="text" class="form-input" id="act-client" placeholder="Client Company">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Total Amount</label>
+                        <input type="number" class="form-input" id="act-amount" placeholder="10000">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Currency</label>
+                        <select class="form-input" id="act-currency">
+                            <option value="USD">USD</option>
+                            <option value="EUR">EUR</option>
+                            <option value="UAH">UAH</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Work Description</label>
+                        <textarea class="form-input" id="act-work" rows="3" placeholder="Software development services..."></textarea>
+                    </div>
+                    <button class="btn btn-primary" onclick="generateAct('en')">Generate Act (EN)</button>
+                    <button class="btn btn-secondary" onclick="generateAct('uk')">Generate Act (UA)</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Generated Document</h2>
+                <div id="generated-doc" style="background: #f9fafb; padding: 20px; border-radius: 8px; white-space: pre-wrap; font-family: monospace; font-size: 13px; max-height: 500px; overflow-y: auto;">
+                    <p style="color: #6b7280;">Generated document will appear here...</p>
+                </div>
+                <div style="margin-top: 16px;">
+                    <button class="btn btn-secondary" onclick="copyDocument()">Copy to Clipboard</button>
+                    <button class="btn btn-secondary" onclick="downloadDocument()">Download as MD</button>
                 </div>
             </div>
         </div>
@@ -3616,6 +3884,392 @@ REDIS_URL=redis://        # Redis cache (optional)</code></pre>
                 alert('Error: ' + e.message);
             }}
         }}
+
+        // ============== AUDIT TAB FUNCTIONS ==============
+        async function runEstimation() {{
+            const loc = parseInt(document.getElementById('audit-loc').value);
+            const profile = document.getElementById('audit-profile').value;
+            const complexity = document.getElementById('audit-complexity').value;
+            const debt = parseFloat(document.getElementById('audit-debt').value);
+
+            try {{
+                const resp = await fetch('/api/mcp/tool', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{
+                        name: 'estimate_cost',
+                        arguments: {{ complexity, profile_id: profile, tech_debt_multiplier: debt }}
+                    }})
+                }});
+                const data = await resp.json();
+                if (data.error) {{
+                    document.getElementById('estimation-result').innerHTML = `<div class="alert alert-warning">${{data.error}}</div>`;
+                }} else {{
+                    document.getElementById('estimation-result').innerHTML = `
+                        <div class="alert alert-success">
+                            <strong>${{data.profile}}</strong> - ${{complexity}}<br>
+                            <strong>Hours:</strong> ${{data.hours.min}} - ${{data.hours.max}} (typical: ${{data.hours.typical}})<br>
+                            <strong>Cost:</strong> ${{data.cost.min.toLocaleString()}} - ${{data.cost.max.toLocaleString()}} ${{data.cost.currency}}<br>
+                            <strong>Rate:</strong> $${{data.rate}}/hr
+                        </div>
+                    `;
+                }}
+            }} catch (e) {{
+                document.getElementById('estimation-result').innerHTML = `<div class="alert alert-warning">Error: ${{e.message}}</div>`;
+            }}
+        }}
+
+        async function calculateScores() {{
+            const scores = {{
+                health_documentation: parseInt(document.getElementById('health-doc').value),
+                health_structure: parseInt(document.getElementById('health-struct').value),
+                health_runability: parseInt(document.getElementById('health-run').value),
+                health_history: parseInt(document.getElementById('health-hist').value),
+                debt_architecture: parseInt(document.getElementById('debt-arch').value),
+                debt_code_quality: parseInt(document.getElementById('debt-quality').value),
+                debt_testing: parseInt(document.getElementById('debt-test').value),
+                debt_infrastructure: parseInt(document.getElementById('debt-infra').value),
+                debt_security: parseInt(document.getElementById('debt-sec').value),
+            }};
+
+            try {{
+                const resp = await fetch('/api/mcp/tool', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{ name: 'calculate_scores', arguments: scores }})
+                }});
+                const data = await resp.json();
+                document.getElementById('scores-result').innerHTML = `
+                    <div class="alert alert-info">
+                        <strong>Health:</strong> ${{data.health.score}}/12 (${{data.health.pct}}%) - ${{data.classification.health_level}}<br>
+                        <strong>Tech Debt:</strong> ${{data.debt.score}}/15 (${{data.debt.pct}}%) - ${{data.classification.debt_level}}<br>
+                        <strong>Overall Readiness:</strong> ${{data.overall_readiness_pct}}%
+                    </div>
+                `;
+            }} catch (e) {{
+                document.getElementById('scores-result').innerHTML = `<div class="alert alert-warning">Error: ${{e.message}}</div>`;
+            }}
+        }}
+
+        async function checkReadiness() {{
+            const scores = {{
+                health_documentation: parseInt(document.getElementById('health-doc').value),
+                health_structure: parseInt(document.getElementById('health-struct').value),
+                health_runability: parseInt(document.getElementById('health-run').value),
+                health_history: parseInt(document.getElementById('health-hist').value),
+                debt_architecture: parseInt(document.getElementById('debt-arch').value),
+                debt_code_quality: parseInt(document.getElementById('debt-quality').value),
+                debt_testing: parseInt(document.getElementById('debt-test').value),
+                debt_infrastructure: parseInt(document.getElementById('debt-infra').value),
+                debt_security: parseInt(document.getElementById('debt-sec').value),
+                profile_id: document.getElementById('audit-profile').value
+            }};
+
+            try {{
+                const resp = await fetch('/api/mcp/tool', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{ name: 'check_readiness', arguments: scores }})
+                }});
+                const data = await resp.json();
+                const color = data.verdict === 'READY_FOR_EVALUATION' ? 'success' : 'warning';
+                document.getElementById('scores-result').innerHTML = `
+                    <div class="alert alert-${{color}}">
+                        <strong>Level:</strong> ${{data.level}}<br>
+                        <strong>Readiness:</strong> ${{data.readiness_pct}}%<br>
+                        <strong>Verdict:</strong> ${{data.verdict}}
+                    </div>
+                `;
+            }} catch (e) {{
+                document.getElementById('scores-result').innerHTML = `<div class="alert alert-warning">Error: ${{e.message}}</div>`;
+            }}
+        }}
+
+        async function checkCompliance() {{
+            const args = {{
+                contract_id: document.getElementById('compliance-contract').value,
+                documentation: parseInt(document.getElementById('comp-doc').value),
+                security: parseInt(document.getElementById('comp-sec').value),
+                testing: parseInt(document.getElementById('comp-test').value),
+                infrastructure: parseInt(document.getElementById('comp-infra').value),
+            }};
+
+            try {{
+                const resp = await fetch('/api/mcp/tool', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{ name: 'check_compliance', arguments: args }})
+                }});
+                const data = await resp.json();
+                const color = data.verdict === 'COMPLIANT' ? 'success' : data.verdict === 'PARTIAL' ? 'warning' : 'alert-warning';
+                let html = `
+                    <div class="alert alert-${{color === 'alert-warning' ? 'warning' : color}}">
+                        <strong>Contract:</strong> ${{data.contract}}<br>
+                        <strong>Verdict:</strong> ${{data.verdict}} (${{data.compliance_pct}}%)<br>
+                `;
+                if (data.compliance && data.compliance.length) {{
+                    html += `<strong>Standards:</strong> ${{data.compliance.join(', ')}}<br>`;
+                }}
+                if (data.failed && data.failed.length) {{
+                    html += `<strong>Failed:</strong> ${{data.failed.map(f => f.metric + ' (need ' + f.required + ', have ' + f.actual + ')').join(', ')}}`;
+                }}
+                html += `</div>`;
+                document.getElementById('compliance-result').innerHTML = html;
+            }} catch (e) {{
+                document.getElementById('compliance-result').innerHTML = `<div class="alert alert-warning">Error: ${{e.message}}</div>`;
+            }}
+        }}
+
+        async function loadRubric() {{
+            const metric = document.getElementById('rubric-metric').value;
+            if (!metric) {{
+                document.getElementById('rubric-display').innerHTML = '';
+                return;
+            }}
+
+            try {{
+                const resp = await fetch('/api/mcp/tool', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{ name: 'get_scoring_rubric', arguments: {{ metric }} }})
+                }});
+                const data = await resp.json();
+                if (data.rubric) {{
+                    let html = '<table class="table"><thead><tr><th>Score</th><th>Description</th></tr></thead><tbody>';
+                    for (const [score, desc] of Object.entries(data.rubric)) {{
+                        html += `<tr><td><strong>${{score}}</strong></td><td>${{desc}}</td></tr>`;
+                    }}
+                    html += '</tbody></table>';
+                    document.getElementById('rubric-display').innerHTML = html;
+                }}
+            }} catch (e) {{
+                document.getElementById('rubric-display').innerHTML = `<div class="alert alert-warning">Error: ${{e.message}}</div>`;
+            }}
+        }}
+
+        // ============== DOCUMENTS TAB FUNCTIONS ==============
+        async function uploadDocument() {{
+            const docType = document.getElementById('doc-type').value;
+            const name = document.getElementById('doc-name').value;
+            const content = document.getElementById('doc-content').value;
+
+            if (!name || !content) {{
+                alert('Please fill in document name and content');
+                return;
+            }}
+
+            try {{
+                const resp = await fetch('/api/mcp/tool', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{
+                        name: 'upload_document',
+                        arguments: {{ doc_type: docType, name, content }}
+                    }})
+                }});
+                const data = await resp.json();
+                if (data.success) {{
+                    alert('Document uploaded successfully!');
+                    document.getElementById('doc-name').value = '';
+                    document.getElementById('doc-content').value = '';
+                    loadPolicies();
+                }} else {{
+                    alert('Error: ' + (data.error || 'Upload failed'));
+                }}
+            }} catch (e) {{
+                alert('Error: ' + e.message);
+            }}
+        }}
+
+        async function loadPolicies() {{
+            try {{
+                const resp = await fetch('/api/mcp/tool', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{ name: 'list_policies', arguments: {{}} }})
+                }});
+                const data = await resp.json();
+                if (data.policies && data.policies.length) {{
+                    let html = '<ul>';
+                    data.policies.forEach(p => {{
+                        html += `<li><strong>${{p.name}}</strong> (${{p.type}})</li>`;
+                    }});
+                    html += '</ul>';
+                    document.getElementById('policies-list').innerHTML = html;
+                }} else {{
+                    document.getElementById('policies-list').innerHTML = '<p style="color: #6b7280;">No policies loaded yet.</p>';
+                }}
+            }} catch (e) {{
+                document.getElementById('policies-list').innerHTML = `<p style="color: #dc2626;">Error loading policies</p>`;
+            }}
+        }}
+
+        async function loadProfilesAndContracts() {{
+            // Load profiles
+            try {{
+                const resp = await fetch('/api/mcp/tool', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{ name: 'list_profiles', arguments: {{}} }})
+                }});
+                const data = await resp.json();
+                if (data.profiles) {{
+                    let html = '';
+                    data.profiles.forEach(p => {{
+                        html += `<tr>
+                            <td><strong>${{p.name}}</strong></td>
+                            <td>${{p.region}}</td>
+                            <td>${{p.currency}}</td>
+                            <td>$${{p.hourly_rates.junior}}</td>
+                            <td>$${{p.hourly_rates.middle}}</td>
+                            <td>$${{p.hourly_rates.senior}}</td>
+                            <td>Health: ${{p.requirements.repo_health}}, Debt: ${{p.requirements.tech_debt}}</td>
+                        </tr>`;
+                    }});
+                    document.getElementById('profiles-table').innerHTML = html;
+                }}
+            }} catch (e) {{ console.error('Error loading profiles:', e); }}
+
+            // Load contracts
+            try {{
+                const resp = await fetch('/api/mcp/tool', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{ name: 'list_contracts', arguments: {{}} }})
+                }});
+                const data = await resp.json();
+                if (data.contracts) {{
+                    let html = '';
+                    data.contracts.forEach(c => {{
+                        const reqs = c.requirements.map(r => `${{r.metric}}: ${{r.min}}${{r.blocking ? ' (blocking)' : ''}}`).join(', ') || 'None';
+                        html += `<tr>
+                            <td><strong>${{c.name}}</strong></td>
+                            <td>${{c.compliance.join(', ') || 'None'}}</td>
+                            <td>${{reqs}}</td>
+                        </tr>`;
+                    }});
+                    document.getElementById('contracts-table').innerHTML = html;
+                }}
+            }} catch (e) {{ console.error('Error loading contracts:', e); }}
+        }}
+
+        // ============== REPORTS TAB FUNCTIONS ==============
+        let generatedContent = '';
+
+        async function loadTemplateVars() {{
+            const templateId = document.getElementById('report-template').value;
+            try {{
+                const resp = await fetch('/api/mcp/tool', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{ name: 'get_template_variables', arguments: {{ template_id: templateId }} }})
+                }});
+                const data = await resp.json();
+                if (data.variables) {{
+                    let html = '';
+                    data.variables.slice(0, 10).forEach(v => {{
+                        html += `<div class="form-group">
+                            <label class="form-label">${{v.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase())}}</label>
+                            <input type="text" class="form-input template-var" data-var="${{v}}" placeholder="${{v}}">
+                        </div>`;
+                    }});
+                    document.getElementById('template-vars-form').innerHTML = html;
+                }}
+            }} catch (e) {{
+                document.getElementById('template-vars-form').innerHTML = `<p style="color: #dc2626;">Error loading variables</p>`;
+            }}
+        }}
+
+        async function generateDocument() {{
+            const templateId = document.getElementById('report-template').value;
+            const variables = {{}};
+            document.querySelectorAll('.template-var').forEach(input => {{
+                if (input.value) {{
+                    variables[input.dataset.var] = input.value;
+                }}
+            }});
+
+            try {{
+                const resp = await fetch('/api/mcp/tool', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{ name: 'generate_document', arguments: {{ template_id: templateId, variables }} }})
+                }});
+                const data = await resp.json();
+                if (data.document) {{
+                    generatedContent = data.document;
+                    document.getElementById('generated-doc').innerText = data.document;
+                }} else {{
+                    document.getElementById('generated-doc').innerHTML = `<p style="color: #dc2626;">Error: ${{data.error || 'Generation failed'}}</p>`;
+                }}
+            }} catch (e) {{
+                document.getElementById('generated-doc').innerHTML = `<p style="color: #dc2626;">Error: ${{e.message}}</p>`;
+            }}
+        }}
+
+        async function generateAct(lang) {{
+            const contractor = document.getElementById('act-contractor').value || 'Contractor LLC';
+            const client = document.getElementById('act-client').value || 'Client Company';
+            const amount = parseFloat(document.getElementById('act-amount').value) || 10000;
+            const currency = document.getElementById('act-currency').value;
+            const work = document.getElementById('act-work').value || 'Software development services';
+
+            const templateId = lang === 'uk' ? 'act_of_work_uk' : 'act_of_work_en';
+            const variables = {{
+                contractor_name: contractor,
+                client_name: client,
+                total_amount: amount,
+                currency: currency,
+                tax_rate: 0,
+                tax_amount: 0,
+                grand_total: amount,
+                contractor_representative: contractor,
+                client_representative: client,
+                act_number: 'ACT-' + Date.now().toString().slice(-6),
+                date: new Date().toISOString().split('T')[0],
+            }};
+
+            try {{
+                const resp = await fetch('/api/mcp/tool', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{ name: 'generate_document', arguments: {{ template_id: templateId, variables }} }})
+                }});
+                const data = await resp.json();
+                if (data.document) {{
+                    generatedContent = data.document;
+                    document.getElementById('generated-doc').innerText = data.document;
+                }}
+            }} catch (e) {{
+                document.getElementById('generated-doc').innerHTML = `<p style="color: #dc2626;">Error: ${{e.message}}</p>`;
+            }}
+        }}
+
+        function copyDocument() {{
+            if (generatedContent) {{
+                navigator.clipboard.writeText(generatedContent);
+                alert('Copied to clipboard!');
+            }}
+        }}
+
+        function downloadDocument() {{
+            if (generatedContent) {{
+                const blob = new Blob([generatedContent], {{ type: 'text/markdown' }});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'document.md';
+                a.click();
+                URL.revokeObjectURL(url);
+            }}
+        }}
+
+        // Initialize on load
+        document.addEventListener('DOMContentLoaded', () => {{
+            loadPolicies();
+            loadProfilesAndContracts();
+            loadTemplateVars();
+        }});
     </script>
 </body>
 </html>
@@ -3731,6 +4385,24 @@ async def api_settings_bounds(request):
     return JSONResponse(SettingsManager.get_validation_bounds(workspace_id))
 
 
+async def api_mcp_tool(request):
+    """Execute an MCP tool directly from web UI."""
+    try:
+        data = await request.json()
+        tool_name = data.get("name")
+        arguments = data.get("arguments", {})
+
+        if not tool_name:
+            return JSONResponse({"error": "Tool name required"}, status_code=400)
+
+        # Execute the tool
+        result = await execute_tool(tool_name, arguments)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.error(f"API tool error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # =============================================================================
 # APPLICATION
 # =============================================================================
@@ -3753,6 +4425,9 @@ def create_app():
         Route('/api/settings/ai-productivity', api_settings_ai_productivity, methods=['GET', 'PUT']),
         Route('/api/settings/bounds', api_settings_bounds),
         Route('/api/settings/reset', api_settings_reset, methods=['POST']),
+
+        # MCP Tool API (for web UI)
+        Route('/api/mcp/tool', api_mcp_tool, methods=['POST']),
 
         # OAuth 2.0
         Route('/.well-known/oauth-authorization-server', oauth_metadata),
