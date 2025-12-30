@@ -3433,13 +3433,13 @@ def _extract_bearer_token(request) -> str:
     auth_header = request.headers.get("authorization", "")
     if auth_header.lower().startswith("bearer "):
         return auth_header.split(" ", 1)[1].strip()
-    return (
-        request.headers.get("x-api-key", "")
-        or request.headers.get("x-mcp-token", "")
-        or request.query_params.get("api_key", "")
-        or request.query_params.get("token", "")
-        or request.query_params.get("access_token", "")
-    )
+    token = request.headers.get("x-api-key", "") or request.headers.get("x-mcp-token", "")
+    if token:
+        return token
+    for key, value in request.query_params.items():
+        if key.strip() in {"api_key", "token", "access_token"} and value:
+            return value
+    return ""
 
 
 def _is_token_valid(token: str) -> bool:
