@@ -3433,7 +3433,13 @@ def _extract_bearer_token(request) -> str:
     auth_header = request.headers.get("authorization", "")
     if auth_header.lower().startswith("bearer "):
         return auth_header.split(" ", 1)[1].strip()
-    return request.headers.get("x-api-key", "") or request.query_params.get("api_key", "")
+    return (
+        request.headers.get("x-api-key", "")
+        or request.headers.get("x-mcp-token", "")
+        or request.query_params.get("api_key", "")
+        or request.query_params.get("token", "")
+        or request.query_params.get("access_token", "")
+    )
 
 
 def _is_token_valid(token: str) -> bool:
@@ -5355,10 +5361,10 @@ def create_app():
         Route('/register', oauth_register, methods=['POST']),
 
         # MCP endpoints
-        Route('/mcp/sse', mcp_sse_endpoint),
+        Route('/mcp/sse', mcp_sse_endpoint, methods=['GET', 'POST']),
         Route('/mcp/message', mcp_message_endpoint, methods=['POST']),
         Route('/mcp', mcp_streamable_http, methods=['GET', 'POST']),
-        Route('/sse', mcp_sse_endpoint),
+        Route('/sse', mcp_sse_endpoint, methods=['GET', 'POST']),
         Route('/message', mcp_message_endpoint, methods=['POST']),
     ]
 
