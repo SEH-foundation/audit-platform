@@ -1,0 +1,270 @@
+:root {
+  --bg: #f4f1ec;
+  --ink: #1b1a17;
+  --muted: #5b5b55;
+  --accent: #d06b3d;
+  --accent-2: #234e52;
+  --card: #fffaf3;
+  --border: #e4dfd4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", "Gill Sans", "Trebuchet MS", sans-serif;
+  background: radial-gradient(circle at top left, #f8f3ea, #f0ebe2 35%, #f4f1ec);
+  color: var(--ink);
+}
+
+a {
+  color: var(--accent-2);
+  text-decoration: none;
+}
+
+main.page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 48px 24px 64px;
+}
+
+.hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 24px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 24px;
+  margin-bottom: 32px;
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+h1 {
+  margin: 8px 0;
+  font-family: "IBM Plex Serif", "Georgia", serif;
+  font-size: 42px;
+}
+
+.subtitle {
+  color: var(--muted);
+  max-width: 520px;
+}
+
+.auth-status {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  color: var(--muted);
+}
+
+.btn {
+  border: none;
+  padding: 10px 16px;
+  border-radius: 24px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--accent-2);
+  border: 1px solid var(--accent-2);
+}
+
+.section {
+  margin: 32px 0 40px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+}
+
+.card {
+  background: var(--card);
+  padding: 20px;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 6px 20px rgba(17, 14, 8, 0.05);
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-desc {
+  color: var(--muted);
+}
+
+.badge {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.badge.production {
+  background: #e7f0ea;
+  color: #2a5f3c;
+}
+
+.badge.internal {
+  background: #e5edf3;
+  color: #24435a;
+}
+
+.badge.dev {
+  background: #f4e8e0;
+  color: #8a4a2b;
+}
+
+.meta {
+  display: grid;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-right: 6px;
+}
+
+.instructions ol {
+  padding-left: 18px;
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tools {
+  display: grid;
+  gap: 8px;
+}
+
+.tool-groups {
+  display: grid;
+  gap: 10px;
+}
+
+.tool-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.tool-title.safe {
+  color: #2a5f3c;
+}
+
+.tool-title.privileged {
+  color: #24435a;
+}
+
+.tool-title.dangerous {
+  color: #8a4a2b;
+}
+
+.tool-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tool-chip {
+  background: #f2eee5;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.tag {
+  background: #f0e9dd;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 24px;
+}
+
+.steps {
+  padding-left: 18px;
+  color: var(--muted);
+}
+
+.rules {
+  padding-left: 18px;
+  color: var(--muted);
+}
+
+.links {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.link-card {
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: #fff;
+}
+
+.link-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.link-desc {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.footer {
+  margin-top: 40px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.error {
+  color: #9b1c1c;
+}
+
+@media (max-width: 720px) {
+  .hero {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  h1 {
+    font-size: 34px;
+  }
+}

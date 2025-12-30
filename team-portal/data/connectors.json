@@ -1,0 +1,31 @@
+[
+  {
+    "id": "seh-audit-mcp",
+    "name": "SEH Audit MCP",
+    "tier": "production",
+    "owner": "SEH Platform",
+    "url": "https://mcp-server-production-0a32.up.railway.app",
+    "description": "Audit and estimation tools for repository health, compliance, and cost.",
+    "tags": ["mcp", "audit", "estimation"],
+    "instructions": [
+      "Admin: Add connector URL in Claude Admin Settings → Connectors.",
+      "Add OAuth Client ID: cpRbn3hIGwRlEf6lbtgDmQ.",
+      "Users: Connect it in Settings → Connectors."
+    ],
+    "download_url": "https://downloads.seh.foundation/connectors/seh-audit-mcp.mcpb"
+  },
+  {
+    "id": "seh-knowledge-centre",
+    "name": "SEH Knowledge Centre",
+    "tier": "internal",
+    "owner": "SEH Platform",
+    "url": "https://knowledge-centre.example.com",
+    "description": "Internal knowledge centre connector (replace with real URL).",
+    "tags": ["knowledge", "rag", "mcp"],
+    "instructions": [
+      "Admin: Add connector URL in Claude Admin Settings → Connectors.",
+      "Users: Connect it in Settings → Connectors."
+    ],
+    "download_url": "https://downloads.seh.foundation/connectors/seh-knowledge-centre.mcpb"
+  }
+]

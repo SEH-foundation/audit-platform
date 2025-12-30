@@ -1,0 +1,17 @@
+[
+  {
+    "title": "Claude Connectors Admin",
+    "description": "Admin settings for adding team connectors.",
+    "url": "https://claude.ai/admin-settings/connectors"
+  },
+  {
+    "title": "Claude User Connectors",
+    "description": "User-level connectors and enablement settings.",
+    "url": "https://claude.ai/settings/connectors"
+  },
+  {
+    "title": "Remote MCP Guide",
+    "description": "Anthropic guidance on custom connectors.",
+    "url": "https://support.claude.com/en/articles/11175166-getting-started-with-custom-connectors-using-remote-mcp"
+  }
+]
