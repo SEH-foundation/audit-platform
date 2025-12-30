@@ -29,6 +29,8 @@ from .formulas import (
     ACTIVITY_RATIOS,
     AI_PRODUCTIVITY,
     METHODOLOGIES,
+    COST_ASSUMPTIONS,
+    STANDARD_METHOD,
     estimate_cocomo_modern,
     estimate_methodology,
     estimate_all_methodologies,
@@ -82,6 +84,7 @@ class CostEstimatorExecutor(BaseExecutor):
             "estimate_classic": self.estimate_classic,
             "estimate_comprehensive": self.estimate_comprehensive,
             "estimate_methodology": self.estimate_single_methodology,
+            "estimate_standard": self.estimate_standard,
             "estimate_pert": self.estimate_pert,
             "estimate_ai_efficiency": self.ai_efficiency,
             "calculate_roi": self.roi,
@@ -89,6 +92,7 @@ class CostEstimatorExecutor(BaseExecutor):
             "get_formulas": self.formulas,
             "get_constants": self.constants,
             "compare_cost": self.compare_cost,
+            "full_estimate": self.full_estimate,
         }
 
         if action not in actions:
@@ -109,6 +113,26 @@ class CostEstimatorExecutor(BaseExecutor):
 
         Formula: Effort = 0.5 × (KLOC)^0.85 × EAF
         """
+        return await self.estimate_standard(
+            loc=loc,
+            region=region,
+            tech_debt_score=tech_debt_score,
+            team_experience=team_experience,
+        )
+
+    async def estimate_standard(
+        self,
+        loc: int,
+        region: str = "eu",
+        tech_debt_score: int = 10,
+        team_experience: str = "nominal",
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Standard production estimate (fixed methodology).
+
+        Method: COCOMO II Modern with fixed constants and EAF.
+        """
         cocomo = estimate_cocomo_modern(loc, tech_debt_score, team_experience)
 
         # Add regional cost
@@ -122,6 +146,7 @@ class CostEstimatorExecutor(BaseExecutor):
         }
 
         return {
+            "standard_method": STANDARD_METHOD,
             **cocomo,
             "hours_breakdown": breakdown,
             "cost_by_region": regional["regions"],
@@ -150,7 +175,8 @@ class CostEstimatorExecutor(BaseExecutor):
         effort_pm = coef["a"] * (kloc ** coef["b"])
         duration = coef["c"] * (effort_pm ** coef["d"])
         team_size = effort_pm / max(duration, 0.5)
-        hours = effort_pm * 152
+        hours_per_pm = COCOMO_CONSTANTS["hours_per_pm"]
+        hours = effort_pm * hours_per_pm
 
         regional = get_all_regional_costs(hours)
 
@@ -173,8 +199,11 @@ class CostEstimatorExecutor(BaseExecutor):
     async def estimate_comprehensive(
         self,
         loc: int,
-        complexity: float = 1.5,
+        complexity: float = 1.0,
         hourly_rate: float = 35,
+        estimation_mode: str = "software",
+        doc_words: int = None,
+        doc_pages: int = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -183,14 +212,23 @@ class CostEstimatorExecutor(BaseExecutor):
         Methodologies: COCOMO II, Gartner, IEEE 1063, Microsoft,
                       Google, PMI, SEI SLIM, Function Points
         """
-        return estimate_all_methodologies(loc, complexity, hourly_rate)
+        return estimate_all_methodologies(
+            loc=loc,
+            complexity=complexity,
+            hourly_rate=hourly_rate,
+            estimation_mode=estimation_mode,
+            doc_words=doc_words,
+            doc_pages=doc_pages,
+        )
 
     async def estimate_single_methodology(
         self,
         methodology: str,
         loc: int,
-        complexity: float = 1.5,
+        complexity: float = 1.0,
         hourly_rate: float = 35,
+        doc_words: int = None,
+        doc_pages: int = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -198,7 +236,14 @@ class CostEstimatorExecutor(BaseExecutor):
 
         Available: cocomo, gartner, ieee, microsoft, google, pmi, sei_slim, function_points
         """
-        return estimate_methodology(methodology, loc, complexity, hourly_rate)
+        return estimate_methodology(
+            methodology,
+            loc,
+            complexity,
+            hourly_rate,
+            doc_words=doc_words,
+            doc_pages=doc_pages,
+        )
 
     async def estimate_pert(
         self,
@@ -238,7 +283,7 @@ class CostEstimatorExecutor(BaseExecutor):
         self,
         loc: int,
         hourly_rate: float = 35,
-        complexity: float = 1.5,
+        complexity: float = 1.0,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -340,12 +385,78 @@ class CostEstimatorExecutor(BaseExecutor):
         """Get all constants."""
         return get_all_constants()
 
+    async def full_estimate(
+        self,
+        scan: dict,
+        quality: dict = None,
+        type: dict = None,
+        region: str = "eu",
+        team_experience: str = "nominal",
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Estimate development effort and cost from scan + quality context."""
+        quality = quality or {}
+        type = type or {}
+
+        loc = int(scan.get("loc") or 0)
+        if loc <= 0:
+            return {"error": "LOC is required for cost estimation"}
+        tech_debt_score = int(quality.get("tech_debt") or 10)
+        tech_debt_score = max(0, min(15, tech_debt_score))
+
+        cocomo = estimate_cocomo_modern(loc, tech_debt_score, team_experience)
+        hours = cocomo["hours"]
+        hours_typical = hours["typical"]
+
+        region_rates = REGIONAL_RATES.get(region, REGIONAL_RATES["eu"])
+        local_cost = {
+            "region": region,
+            "currency": region_rates["currency"],
+            "symbol": region_rates["symbol"],
+            "min": round(hours_typical * region_rates["rates"]["junior"]),
+            "typical": round(hours_typical * region_rates["rates"]["middle"]),
+            "max": round(hours_typical * region_rates["rates"]["senior"]),
+        }
+
+        us_rates = REGIONAL_RATES["us"]
+        dev_cost_usd = round(hours_typical * us_rates["rates"]["middle"])
+        maintenance_cost_monthly = round((dev_cost_usd * COST_ASSUMPTIONS["maintenance_rate"]) / 12, 2)
+        ip_value_usd = round(dev_cost_usd * COST_ASSUMPTIONS["ip_multiplier"])
+        timeline_weeks = round(cocomo["schedule_months"] * 4.3, 1)
+
+        return {
+            "standard_method": STANDARD_METHOD,
+            "dev_hours_min": hours["min"],
+            "dev_hours_max": hours["max"],
+            "dev_cost_usd": dev_cost_usd,
+            "dev_cost_local": local_cost,
+            "ip_value_usd": ip_value_usd,
+            "maintenance_cost_monthly": maintenance_cost_monthly,
+            "team_size": cocomo["team_size"],
+            "timeline_weeks": timeline_weeks,
+            "estimated_hours": hours_typical,
+            "estimated_cost_usd": dev_cost_usd,
+            "team_size_recommended": cocomo["team_size"],
+            "inputs": {
+                "loc": loc,
+                "region": region,
+                "tech_debt_score": tech_debt_score,
+                "team_experience": team_experience,
+            },
+            "assumptions": [
+                "USD cost uses US regional rates for normalization.",
+                f"Maintenance cost assumes {int(COST_ASSUMPTIONS['maintenance_rate'] * 100)}% annual rate of typical dev cost.",
+                f"IP value uses {COST_ASSUMPTIONS['ip_multiplier']}x multiplier on normalized dev cost.",
+            ],
+        }
+
     def get_capabilities(self) -> list[str]:
         return [
             "estimate",
             "estimate_classic",
             "estimate_comprehensive",
             "estimate_methodology",
+            "estimate_standard",
             "estimate_pert",
             "estimate_ai_efficiency",
             "calculate_roi",
@@ -353,6 +464,7 @@ class CostEstimatorExecutor(BaseExecutor):
             "compare_cost",
             "get_formulas",
             "get_constants",
+            "full_estimate",
         ]
 
 

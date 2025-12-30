@@ -93,6 +93,9 @@ COCOMO_CONSTANTS = {
     "hours_per_pm": 160,  # Hours per person-month
 }
 
+# Ranges for reporting uncertainty (not modifying effort)
+HOURS_RANGE = {"min": 0.8, "max": 1.2}
+
 # Classic COCOMO II coefficients (for comparison)
 COCOMO_CLASSIC = {
     "organic": {"a": 2.4, "b": 1.05, "c": 2.5, "d": 0.38},
@@ -174,6 +177,22 @@ AI_PRODUCTIVITY = {
     "hybrid": 6.5,         # Optimized AI+Human workflow
 }
 
+# Cost assumptions for extended outputs
+COST_ASSUMPTIONS = {
+    "maintenance_rate": 0.20,  # Annual maintenance as % of dev cost
+    "ip_multiplier": 1.20,     # IP valuation multiplier on dev cost
+}
+
+# Single standard for production estimates
+STANDARD_METHOD = {
+    "id": "cocomo_modern_v1",
+    "name": "COCOMO II Modern (Fixed)",
+    "effort_formula": "Effort (PM) = a × (KLOC)^b × EAF",
+    "schedule_formula": "Duration (months) = c × (Effort)^d",
+    "hours_formula": "Hours = Effort × hours_per_pm",
+    "constants": COCOMO_CONSTANTS,
+}
+
 
 # =============================================================================
 # 8 ESTIMATION METHODOLOGIES
@@ -187,6 +206,7 @@ METHODOLOGIES = {
         "source": "Boehm et al. (2000), Modern calibration",
         "confidence": "High",
         "description": "Industry-standard parametric model for software cost estimation",
+        "kind": "software",
     },
     "gartner": {
         "id": "gartner",
@@ -195,6 +215,7 @@ METHODOLOGIES = {
         "source": "Gartner Research 2023",
         "confidence": "High",
         "description": "Enterprise documentation standard (500-800 words/day)",
+        "kind": "documentation",
     },
     "ieee": {
         "id": "ieee",
@@ -203,6 +224,7 @@ METHODOLOGIES = {
         "source": "IEEE Standard 1063",
         "confidence": "High",
         "description": "Technical documentation standard (1-2 pages/day)",
+        "kind": "documentation",
     },
     "microsoft": {
         "id": "microsoft",
@@ -211,6 +233,7 @@ METHODOLOGIES = {
         "source": "Microsoft Documentation Standards",
         "confidence": "Medium",
         "description": "Tech industry standard (650 words/day)",
+        "kind": "documentation",
     },
     "google": {
         "id": "google",
@@ -219,6 +242,7 @@ METHODOLOGIES = {
         "source": "Google Technical Writing Guidelines",
         "confidence": "Medium",
         "description": "UX-driven approach (4 hours per page)",
+        "kind": "documentation",
     },
     "pmi": {
         "id": "pmi",
@@ -227,6 +251,7 @@ METHODOLOGIES = {
         "source": "PMI Project Management Standards",
         "confidence": "Medium",
         "description": "Project management approach (25% of project effort)",
+        "kind": "documentation",
     },
     "sei_slim": {
         "id": "sei_slim",
@@ -236,6 +261,7 @@ METHODOLOGIES = {
         "confidence": "Medium",
         "description": "For regulated industries (0.30-0.50 factor), 10K+ LOC only",
         "min_loc": 10000,
+        "kind": "software",
     },
     "function_points": {
         "id": "function_points",
@@ -244,6 +270,7 @@ METHODOLOGIES = {
         "source": "ISO/IEC 20926",
         "confidence": "Medium",
         "description": "Based on functional requirements estimation",
+        "kind": "software",
     },
 }
 
@@ -289,17 +316,10 @@ def estimate_cocomo_modern(
     kloc = max(loc / 1000, 0.1)
     c = COCOMO_CONSTANTS
 
-    # Effort multiplier from team experience
+    # Effort multiplier from team experience and tech debt
     eaf = EFFORT_MULTIPLIERS["team_experience"].get(team_experience, 1.0)
-
-    # Tech debt affects exponent
-    debt_adjust = 0
-    for (low, high), mult in TECH_DEBT_MULTIPLIERS.items():
-        if low <= tech_debt_score <= high:
-            debt_adjust = (mult - 1) * 0.1
-            break
-
-    exponent = c["b"] + debt_adjust
+    eaf *= get_tech_debt_multiplier(tech_debt_score)
+    exponent = c["b"]
 
     # Base effort
     effort_pm = c["a"] * (kloc ** exponent) * eaf
@@ -310,8 +330,8 @@ def estimate_cocomo_modern(
     team_size = effort_pm / max(schedule_months, 0.5)
 
     return {
-        "methodology": "COCOMO II (Modern)",
-        "formula": f"Effort = {c['a']} × ({kloc:.2f})^{exponent:.2f} × {eaf} = {effort_pm:.2f} PM",
+        "methodology": STANDARD_METHOD["id"],
+        "formula": f"Effort = {c['a']} × ({kloc:.2f})^{exponent:.2f} × {eaf:.2f} = {effort_pm:.2f} PM",
         "inputs": {
             "loc": loc,
             "kloc": round(kloc, 2),
@@ -322,9 +342,9 @@ def estimate_cocomo_modern(
         "schedule_months": round(schedule_months, 1),
         "team_size": round(team_size, 1),
         "hours": {
-            "min": round(hours * 0.8),
+            "min": round(hours * HOURS_RANGE["min"]),
             "typical": round(hours),
-            "max": round(hours * 1.2),
+            "max": round(hours * HOURS_RANGE["max"]),
         },
     }
 
@@ -332,39 +352,62 @@ def estimate_cocomo_modern(
 def estimate_methodology(
     methodology: str,
     loc: int,
-    complexity: float = 1.5,
+    complexity: float = 1.0,
     hourly_rate: float = 35,
+    doc_words: Optional[int] = None,
+    doc_pages: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Calculate single methodology estimate."""
     if methodology not in METHODOLOGIES:
         return {"error": f"Unknown methodology: {methodology}"}
 
+    if loc is None:
+        return {"error": "loc is required for estimation"}
+
     kloc = loc / 1000
-    words = loc * LOC_CONVERSION["words_per_loc"]
-    pages = math.ceil(words / LOC_CONVERSION["words_per_page"])
+    words = None
+    pages = None
+
+    if doc_words is not None:
+        words = max(int(doc_words), 0)
+        pages = math.ceil(words / LOC_CONVERSION["words_per_page"])
+    elif doc_pages is not None:
+        pages = max(int(doc_pages), 0)
+        words = pages * LOC_CONVERSION["words_per_page"]
 
     meta = METHODOLOGIES[methodology]
+    warnings = []
 
     if methodology == "cocomo":
         effort_pm = 0.5 * (kloc ** 0.85) * complexity
         hours = effort_pm * 160
         formula_calc = f"0.5 × ({kloc:.1f})^0.85 × {complexity} = {effort_pm:.2f} PM"
     elif methodology == "gartner":
+        if words is None:
+            return {"error": "Documentation words are required for Gartner estimate"}
         days = (words / 650) * complexity
         hours = days * 8
         formula_calc = f"{words:,} words ÷ 650 × {complexity} = {days:.1f} days"
     elif methodology == "ieee":
+        if pages is None:
+            return {"error": "Documentation pages are required for IEEE estimate"}
         days = (pages / 1.5) * complexity
         hours = days * 8
         formula_calc = f"{pages} pages ÷ 1.5 × {complexity} = {days:.1f} days"
     elif methodology == "microsoft":
+        if words is None:
+            return {"error": "Documentation words are required for Microsoft estimate"}
         days = (words / 650) * complexity
         hours = days * 8
         formula_calc = f"{words:,} words ÷ 650 × {complexity} = {days:.1f} days"
     elif methodology == "google":
+        if pages is None:
+            return {"error": "Documentation pages are required for Google estimate"}
         hours = (pages * 4) * complexity
         formula_calc = f"{pages} pages × 4 × {complexity} = {hours:.0f} hours"
     elif methodology == "pmi":
+        if pages is None:
+            return {"error": "Documentation pages are required for PMI estimate"}
         days = (pages * 0.25) * complexity
         hours = days * 8
         formula_calc = f"{pages} pages × 0.25 × {complexity} = {days:.1f} days"
@@ -384,7 +427,7 @@ def estimate_methodology(
         hours = loc / 10
         formula_calc = "Unknown methodology"
 
-    return {
+    result = {
         "id": methodology,
         "name": meta["name"],
         "hours": round(hours, 1),
@@ -395,20 +438,53 @@ def estimate_methodology(
         "formula_calculated": formula_calc,
         "source": meta["source"],
     }
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 def estimate_all_methodologies(
     loc: int,
-    complexity: float = 1.5,
+    complexity: float = 1.0,
     hourly_rate: float = 35,
+    estimation_mode: str = "software",
+    doc_words: Optional[int] = None,
+    doc_pages: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Estimate using all 8 methodologies."""
+    """Estimate using matching methodologies."""
     results = []
+    warnings = []
+
+    mode = (estimation_mode or "software").lower()
+    if mode not in {"software", "documentation", "all"}:
+        return {"error": f"Unknown estimation_mode: {estimation_mode}"}
+
+    if mode == "software":
+        allowed_kinds = {"software"}
+    elif mode == "documentation":
+        allowed_kinds = {"documentation"}
+    else:
+        allowed_kinds = {"software", "documentation"}
+
+    if mode == "documentation" and doc_words is None and doc_pages is None:
+        return {"error": "Documentation mode requires doc_words or doc_pages."}
 
     for mid in METHODOLOGIES.keys():
         if mid == "sei_slim" and loc < 10000:
             continue
-        result = estimate_methodology(mid, loc, complexity, hourly_rate)
+        kind = METHODOLOGIES[mid].get("kind", "software")
+        if kind not in allowed_kinds:
+            continue
+        if kind == "documentation" and doc_words is None and doc_pages is None:
+            continue
+        result = estimate_methodology(
+            mid,
+            loc,
+            complexity,
+            hourly_rate,
+            doc_words=doc_words,
+            doc_pages=doc_pages,
+        )
         if "error" not in result:
             results.append(result)
 
@@ -421,8 +497,15 @@ def estimate_all_methodologies(
     else:
         pert = None
 
-    return {
-        "input": {"loc": loc, "complexity": complexity, "hourly_rate": hourly_rate},
+    payload = {
+        "input": {
+            "loc": loc,
+            "complexity": complexity,
+            "hourly_rate": hourly_rate,
+            "estimation_mode": mode,
+            "doc_words": doc_words,
+            "doc_pages": doc_pages,
+        },
         "methodologies": results,
         "summary": {
             "average_hours": round(sum(all_hours) / len(all_hours), 1) if all_hours else 0,
@@ -433,6 +516,9 @@ def estimate_all_methodologies(
         },
         "pert": pert,
     }
+    if warnings:
+        payload["warnings"] = warnings
+    return payload
 
 
 def calculate_pert(
@@ -470,7 +556,7 @@ def calculate_pert(
 def estimate_ai_efficiency(
     loc: int,
     hourly_rate: float = 35,
-    complexity: float = 1.5,
+    complexity: float = 1.0,
 ) -> Dict[str, Any]:
     """
     Compare Pure Human vs AI-Assisted vs Hybrid.
@@ -646,6 +732,7 @@ def get_tech_debt_multiplier(score: int) -> float:
 def get_all_formulas() -> Dict[str, Any]:
     """Get all formulas documentation."""
     return {
+        "standard_method": STANDARD_METHOD,
         "cocomo_ii": {
             "effort": "Effort (PM) = a × (KLOC)^b × EAF",
             "schedule": "Duration (months) = c × (Effort)^d",
@@ -653,14 +740,19 @@ def get_all_formulas() -> Dict[str, Any]:
             "constants_modern": COCOMO_CONSTANTS,
             "constants_classic": COCOMO_CLASSIC,
             "multipliers": EFFORT_MULTIPLIERS,
+            "ranges": HOURS_RANGE,
         },
         "pert": PERT_FORMULAS,
-        "methodologies": {m: {"formula": d["formula"], "source": d["source"]} for m, d in METHODOLOGIES.items()},
+        "methodologies": {
+            m: {"formula": d["formula"], "source": d["source"], "kind": d.get("kind", "software")}
+            for m, d in METHODOLOGIES.items()
+        },
         "ai_efficiency": {
             "pure_human": f"{AI_PRODUCTIVITY['pure_human']} hrs/KLOC",
             "ai_assisted": f"{AI_PRODUCTIVITY['ai_assisted']} hrs/KLOC",
             "hybrid": f"{AI_PRODUCTIVITY['hybrid']} hrs/KLOC",
         },
+        "cost_assumptions": COST_ASSUMPTIONS,
         "roi": {
             "roi_1yr": "(net_annual - investment) / investment × 100",
             "roi_3yr": "(net_annual × 3 - investment) / investment × 100",
@@ -673,6 +765,7 @@ def get_all_formulas() -> Dict[str, Any]:
 def get_all_constants() -> Dict[str, Any]:
     """Get all constants."""
     return {
+        "standard_method": STANDARD_METHOD,
         "cocomo": COCOMO_CONSTANTS,
         "cocomo_classic": COCOMO_CLASSIC,
         "effort_multipliers": EFFORT_MULTIPLIERS,
@@ -683,4 +776,6 @@ def get_all_constants() -> Dict[str, Any]:
         "ai_productivity": AI_PRODUCTIVITY,
         "loc_conversion": LOC_CONVERSION,
         "regional_rates": REGIONAL_RATES,
+        "hours_range": HOURS_RANGE,
+        "cost_assumptions": COST_ASSUMPTIONS,
     }

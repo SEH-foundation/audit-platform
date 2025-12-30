@@ -14,6 +14,7 @@ import asyncio
 import json
 import sys
 from pathlib import Path
+import os
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -84,6 +85,35 @@ class AuditMCPServer:
                     "required": ["source"]
                 }
             },
+            {
+                "name": "audit_preflight",
+                "description": "Preflight planner: quick type detection and a recommended audit strategy before running.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "source": {
+                            "type": "string",
+                            "description": "Git URL (https://github.com/...) or local path (/path/to/dir)"
+                        },
+                        "goal": {
+                            "type": "string",
+                            "enum": ["overview", "type", "quality", "compliance", "cost", "full"],
+                            "description": "Primary goal for audit strategy selection"
+                        },
+                        "branch": {"type": "string", "default": "main"},
+                        "policy_id": {
+                            "type": "string",
+                            "description": "Policy to check against: global_fund_r13, standard, enterprise"
+                        },
+                        "region": {
+                            "type": "string",
+                            "enum": list(REGIONAL_RATES.keys()) if FORMULAS_AVAILABLE else ["ua", "eu", "us"],
+                            "default": "ua"
+                        }
+                    },
+                    "required": ["source"]
+                }
+            },
 
             # ─────────────────────────────────────────────────────────────
             # COCOMO II ESTIMATION
@@ -112,8 +142,16 @@ class AuditMCPServer:
                     "type": "object",
                     "properties": {
                         "loc": {"type": "integer"},
-                        "complexity": {"type": "number", "default": 1.5, "description": "0.5-3.0"},
+                        "complexity": {"type": "number", "default": 1.0, "description": "0.5-3.0"},
                         "hourly_rate": {"type": "number", "default": 35},
+                        "estimation_mode": {
+                            "type": "string",
+                            "enum": ["software", "documentation", "all"],
+                            "default": "software",
+                            "description": "Limit methodologies by domain"
+                        },
+                        "doc_words": {"type": "integer", "description": "Documentation word count (for documentation mode)"},
+                        "doc_pages": {"type": "integer", "description": "Documentation page count (for documentation mode)"},
                     },
                     "required": ["loc"]
                 }
@@ -129,8 +167,10 @@ class AuditMCPServer:
                             "enum": list(METHODOLOGIES.keys()) if FORMULAS_AVAILABLE else ["cocomo", "gartner", "ieee"]
                         },
                         "loc": {"type": "integer"},
-                        "complexity": {"type": "number", "default": 1.5},
+                        "complexity": {"type": "number", "default": 1.0},
                         "hourly_rate": {"type": "number", "default": 35},
+                        "doc_words": {"type": "integer"},
+                        "doc_pages": {"type": "integer"},
                     },
                     "required": ["methodology", "loc"]
                 }
@@ -170,7 +210,7 @@ class AuditMCPServer:
                     "properties": {
                         "loc": {"type": "integer"},
                         "hourly_rate": {"type": "number", "default": 35},
-                        "complexity": {"type": "number", "default": 1.5},
+                        "complexity": {"type": "number", "default": 1.0},
                     },
                     "required": ["loc"]
                 }
@@ -229,8 +269,8 @@ class AuditMCPServer:
             # DOCUMENT MANAGEMENT
             # ─────────────────────────────────────────────────────────────
             {
-                "name": "upload_document",
-                "description": "Upload contract or policy document (PDF, DOCX) for compliance checking",
+                "name": "upload_document_file",
+                "description": "Upload contract or policy document file (PDF, DOCX) for compliance checking",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -325,6 +365,8 @@ class AuditMCPServer:
         # Audit tools
         if name == "audit":
             return await self._run_audit(args)
+        elif name == "audit_preflight":
+            return await self._preflight(args)
 
         # Estimation tools
         elif name == "estimate_cocomo":
@@ -349,7 +391,7 @@ class AuditMCPServer:
             return self._get_constants()
 
         # Document tools
-        elif name == "upload_document":
+        elif name == "upload_document_file":
             return await self._upload_document(args)
         elif name == "list_policies":
             return self._list_policies()
@@ -383,33 +425,41 @@ class AuditMCPServer:
         hours = result["hours"]["typical"]
         regional = get_all_regional_costs(hours)
 
-        return {
+        payload = {
             **result,
             "cost_by_region": regional["regions"],
         }
+        return self._attach_validation(payload, kloc=loc / 1000, hourly_rate=args.get("hourly_rate"))
 
     def _estimate_comprehensive(self, args: dict) -> dict:
         """All 8 methodologies."""
         if not FORMULAS_AVAILABLE:
             return {"error": "Formulas module not available"}
 
-        return estimate_all_methodologies(
+        payload = estimate_all_methodologies(
             loc=args.get("loc", 10000),
-            complexity=args.get("complexity", 1.5),
+            complexity=args.get("complexity", 1.0),
             hourly_rate=args.get("hourly_rate", 35),
+            estimation_mode=args.get("estimation_mode", "software"),
+            doc_words=args.get("doc_words"),
+            doc_pages=args.get("doc_pages"),
         )
+        return self._attach_validation(payload, kloc=args.get("loc", 10000) / 1000, hourly_rate=args.get("hourly_rate", 35))
 
     def _estimate_methodology(self, args: dict) -> dict:
         """Single methodology."""
         if not FORMULAS_AVAILABLE:
             return {"error": "Formulas module not available"}
 
-        return estimate_methodology(
+        payload = estimate_methodology(
             methodology=args["methodology"],
             loc=args["loc"],
-            complexity=args.get("complexity", 1.5),
+            complexity=args.get("complexity", 1.0),
             hourly_rate=args.get("hourly_rate", 35),
+            doc_words=args.get("doc_words"),
+            doc_pages=args.get("doc_pages"),
         )
+        return self._attach_validation(payload, kloc=args["loc"] / 1000, hourly_rate=args.get("hourly_rate", 35))
 
     def _list_methodologies(self) -> dict:
         """List all methodologies."""
@@ -445,25 +495,26 @@ class AuditMCPServer:
             },
         }
 
-        return pert
+        return self._attach_validation(pert, kloc=args.get("loc", 0) / 1000 if args.get("loc") else 0, hourly_rate=rate)
 
     def _estimate_ai_efficiency(self, args: dict) -> dict:
         """AI efficiency comparison."""
         if not FORMULAS_AVAILABLE:
             return {"error": "Formulas module not available"}
 
-        return estimate_ai_efficiency(
+        payload = estimate_ai_efficiency(
             loc=args["loc"],
             hourly_rate=args.get("hourly_rate", 35),
-            complexity=args.get("complexity", 1.5),
+            complexity=args.get("complexity", 1.0),
         )
+        return self._attach_validation(payload, kloc=args["loc"] / 1000, hourly_rate=args.get("hourly_rate", 35))
 
     def _calculate_roi(self, args: dict) -> dict:
         """ROI analysis."""
         if not FORMULAS_AVAILABLE:
             return {"error": "Formulas module not available"}
 
-        return calculate_roi(
+        payload = calculate_roi(
             investment_cost=args["investment_cost"],
             annual_support_savings=args.get("annual_support_savings", 0),
             annual_training_savings=args.get("annual_training_savings", 0),
@@ -471,6 +522,55 @@ class AuditMCPServer:
             annual_risk_reduction=args.get("annual_risk_reduction", 0),
             maintenance_percent=args.get("maintenance_percent", 20),
         )
+        return self._attach_validation(payload, kloc=args.get("loc", 0) / 1000 if args.get("loc") else 0, hourly_rate=args.get("hourly_rate"))
+
+    def _attach_validation(self, payload: dict, kloc: float, hourly_rate: float = None) -> dict:
+        """Attach validation bounds if available from HTTP server module."""
+        strict = os.environ.get("STRICT_ESTIMATION", "true").lower() in {"1", "true", "yes"}
+        rate_min = float(os.environ.get("RATE_MIN", "5"))
+        rate_max = float(os.environ.get("RATE_MAX", "300"))
+        hours_per_kloc_min = float(os.environ.get("HOURS_PER_KLOC_MIN", "2"))
+        hours_per_kloc_max = float(os.environ.get("HOURS_PER_KLOC_MAX", "200"))
+
+        total_hours = payload.get("hours")
+        if isinstance(payload.get("hours"), dict):
+            total_hours = payload["hours"].get("typical") or payload["hours"].get("expected")
+        total_cost = None
+        if payload.get("cost"):
+            total_cost = payload["cost"].get("expected") or payload["cost"].get("typical")
+        if total_hours and total_cost is not None:
+            hourly_rate_val = hourly_rate or (total_cost / total_hours if total_hours else 0)
+            hours_per_kloc = (total_hours / kloc) if kloc else 0
+            errors = []
+            warnings = []
+            if kloc:
+                if hours_per_kloc < hours_per_kloc_min:
+                    errors.append(f"Hours/KLOC ({hours_per_kloc:.1f}) below minimum ({hours_per_kloc_min})")
+                elif hours_per_kloc > hours_per_kloc_max:
+                    errors.append(f"Hours/KLOC ({hours_per_kloc:.1f}) above maximum ({hours_per_kloc_max})")
+            if hourly_rate_val:
+                if hourly_rate_val < rate_min:
+                    warnings.append(f"Rate ${hourly_rate_val}/hr below minimum ${rate_min}")
+                elif hourly_rate_val > rate_max:
+                    warnings.append(f"Rate ${hourly_rate_val}/hr above maximum ${rate_max}")
+            validation = {
+                "valid": len(errors) == 0,
+                "total_hours": total_hours,
+                "total_cost": total_cost,
+                "kloc": kloc,
+                "hourly_rate": hourly_rate_val,
+                "hours_per_kloc": hours_per_kloc,
+                "warnings": warnings,
+                "errors": errors,
+                "bounds": {
+                    "rate_range": f"${rate_min}-${rate_max}/hr",
+                    "hours_per_kloc_range": f"{hours_per_kloc_min}-{hours_per_kloc_max}",
+                },
+            }
+            payload["validation"] = validation
+            if strict and not validation["valid"]:
+                return {"error": "Estimate failed validation", "validation": validation}
+        return payload
 
     def _get_regional_costs(self, args: dict) -> dict:
         """Regional costs for all 8 regions."""
@@ -511,6 +611,90 @@ class AuditMCPServer:
             )
         except ImportError:
             return {"error": "Audit runner not available"}
+
+    async def _preflight(self, args: dict) -> dict:
+        """Preflight planner for selecting audit strategy."""
+        try:
+            from run import run_audit
+        except ImportError:
+            return {"error": "Audit runner not available"}
+
+        source = args["source"]
+        branch = args.get("branch", "main")
+        goal = (args.get("goal") or "").lower()
+        policy_id = args.get("policy_id")
+        region = args.get("region", "ua")
+
+        # Run preflight workflow (quick_scan + detect_type)
+        analysis = await run_audit(
+            source=source,
+            task="preflight",
+            branch=branch,
+            policy_id=policy_id,
+            region=region,
+            verbose=False
+        )
+
+        outputs = analysis.get("results", {}).get("outputs", {})
+        stages = analysis.get("results", {}).get("stages", {})
+        quick_scan = stages.get("quick_scan", {}).get("outputs", {})
+        detect_type = stages.get("detect_type", {}).get("outputs", {})
+
+        recommended_task, rationale, questions = self._recommend_task(goal, policy_id, quick_scan, detect_type)
+
+        return {
+            "source": source,
+            "goal": goal or None,
+            "project_snapshot": {
+                "files": outputs.get("files"),
+                "loc": outputs.get("loc"),
+                "languages": outputs.get("languages"),
+                "project_type": outputs.get("project_type"),
+            },
+            "recommended_task": recommended_task,
+            "rationale": rationale,
+            "questions": questions,
+            "next_call": {
+                "tool": "audit",
+                "arguments": {
+                    "source": source,
+                    "task": recommended_task,
+                    "branch": branch,
+                    "policy_id": policy_id,
+                    "region": region,
+                },
+            },
+            "standard_cost_method": "cocomo_modern_v1",
+        }
+
+    def _recommend_task(self, goal: str, policy_id: str, scan: dict, type_info: dict):
+        """Deterministic task selection based on inputs."""
+        if goal == "overview":
+            return "quick_scan", "Запрошено швидкий огляд.", []
+        if goal == "type":
+            return "detect_type", "Запрошено визначення типу проєкту.", []
+        if goal == "quality":
+            return "check_quality", "Запрошено оцінку якості.", []
+        if goal == "compliance":
+            return "check_compliance", "Запрошено перевірку відповідності.", []
+        if goal == "cost":
+            return "estimate_cost", "Запрошено оцінку вартості.", []
+        if goal == "full":
+            return "full_audit", "Запрошено повний аудит.", []
+
+        if policy_id:
+            return "check_compliance", "Є policy_id, тому рекомендовано compliance.", []
+
+        loc = scan.get("loc", 0) if isinstance(scan, dict) else 0
+        if loc == 0:
+            return "quick_scan", "Немає LOC; спершу потрібен quick_scan.", [
+                "Яка основна мета аудиту: якість, відповідність, вартість чи повний?"
+            ]
+
+        return "check_quality", "Типова стратегія для старту: перевірка якості.", [
+            "Потрібна перевірка відповідності до політики/контракту?",
+            "Потрібна оцінка вартості/часу розробки?",
+        ]
 
     async def _upload_document(self, args: dict) -> dict:
         """Upload and parse document"""

@@ -77,6 +77,8 @@ class GitAnalyzerExecutor(BaseExecutor):
                     "commit_count": history.get("commit_count", 0),
                     "contributors": history.get("contributors", 0),
                     "last_commit": history.get("last_commit_date"),
+                    "commit_frequency": history.get("commit_frequency", 0),
+                    "branch_count": history.get("branch_count", 1),
                 },
                 "is_git_repo": True
             }
@@ -107,6 +109,8 @@ class GitAnalyzerExecutor(BaseExecutor):
                     "commit_count": history.get("commit_count", 0),
                     "contributors": history.get("contributors", 0),
                     "last_commit": history.get("last_commit_date"),
+                    "commit_frequency": history.get("commit_frequency", 0),
+                    "branch_count": history.get("branch_count", 1),
                 })
 
             return {

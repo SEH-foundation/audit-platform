@@ -234,8 +234,8 @@ async def explain_level(level_name: str):
 async def get_recommendations(request: RecommendationsRequest):
     """Get prioritized recommendations"""
     # Use MCP server logic
-    from gateway.mcp.server import MCPServer
-    mcp = MCPServer()
+    from gateway.mcp.server import AuditMCPServer
+    mcp = AuditMCPServer()
     return mcp._get_recommendations(request.dict())
 
 

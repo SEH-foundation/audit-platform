@@ -35,3 +35,8 @@ htmlcov/
 data/uploads/
 data/temp/
 *.db
+
+# Frontend artifacts
+node_modules/
+.next/
+.vercel/

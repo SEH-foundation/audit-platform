@@ -20,13 +20,33 @@ sys.path.insert(0, str(Path(__file__).parent))
 from core.engine import AuditEngine
 
 
+def _normalize_region(region: str) -> str:
+    """Normalize legacy region codes to current cost-estimator regions."""
+    if not region:
+        return "ua"
+    normalized = region.strip().lower()
+    legacy_map = {
+        "eu_ua": "ua",
+        "eu_pl": "pl",
+        "us": "us",
+        "eu": "eu",
+        "ua": "ua",
+        "ua_compliance": "ua_compliance",
+        "pl": "pl",
+        "de": "de",
+        "uk": "uk",
+        "in": "in",
+    }
+    return legacy_map.get(normalized, normalized)
+
+
 async def run_audit(
     source: str,
     task: str = "quick_scan",
     branch: str = "main",
     contract_id: str = None,
     policy_id: str = None,
-    region: str = "EU_UA",
+    region: str = "ua",
     output_file: str = None,
     verbose: bool = False
 ) -> dict:
@@ -54,17 +74,26 @@ async def run_audit(
         print(f"Task: {task}", file=sys.stderr)
 
     try:
-        results = await engine.run_workflow(
-            workflow_name="audit",
-            inputs={
+        workflow_name = "audit"
+        workflow_inputs = {
+            "source_type": source_type,
+            "source_path": source,
+            "branch": branch,
+            "task": task,
+            "contract_id": contract_id,
+            "policy_id": policy_id,
+            "region": _normalize_region(region),
+        }
+        if task == "preflight":
+            workflow_name = "preflight"
+            workflow_inputs = {
                 "source_type": source_type,
                 "source_path": source,
                 "branch": branch,
-                "task": task,
-                "contract_id": contract_id,
-                "policy_id": policy_id,
-                "region": region,
-            },
+            }
+        results = await engine.run_workflow(
+            workflow_name=workflow_name,
+            inputs=workflow_inputs,
             progress_callback=on_progress if verbose else None
         )
     except Exception as e:
@@ -102,9 +131,9 @@ async def register_executors(engine: AuditEngine, verbose: bool = False):
     executor_modules = [
         ("source-loader", "git-analyzer"),  # Use git-analyzer as source-loader for now
         ("scanner", "static-analyzer"),      # Use static-analyzer for scanning
-        ("readiness-checker", None),         # TODO
-        ("type-detector", None),             # TODO
-        ("quality-analyzer", "static-analyzer"),
+        ("readiness-checker", "readiness-checker"),
+        ("type-detector", "type-detector"),
+        ("quality-analyzer", "quality-analyzer"),
         ("compliance-checker", "contract-checker"),
         ("cost-estimator", "cost-estimator"),
         ("document-loader", "document-loader"),
@@ -157,7 +186,7 @@ Tasks:
     parser.add_argument("--source", "-s", required=True,
                         help="Git URL or local directory path")
     parser.add_argument("--task", "-t", default="quick_scan",
-                        choices=["quick_scan", "detect_type", "check_quality",
+                        choices=["preflight", "quick_scan", "detect_type", "check_quality",
                                 "check_compliance", "estimate_cost", "full_audit"],
                         help="Task to run (default: quick_scan)")
     parser.add_argument("--branch", "-b", default="main",
@@ -166,9 +195,9 @@ Tasks:
                         help="Contract ID for compliance check")
     parser.add_argument("--policy", "-p",
                         help="Policy ID (e.g., global_fund_r13, standard, enterprise)")
-    parser.add_argument("--region", "-r", default="EU_UA",
-                        choices=["US", "EU_PL", "EU_UA"],
-                        help="Region for cost estimation (default: EU_UA)")
+    parser.add_argument("--region", "-r", default="ua",
+                        choices=["ua", "ua_compliance", "pl", "eu", "de", "uk", "us", "in", "EU_UA", "EU_PL", "US"],
+                        help="Region for cost estimation (default: ua; legacy: EU_UA, EU_PL, US)")
     parser.add_argument("--output", "-o",
                         help="Output JSON file path")
     parser.add_argument("--verbose", "-v", action="store_true",

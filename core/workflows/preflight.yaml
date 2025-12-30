@@ -1,0 +1,70 @@
+# Preflight Workflow v1.0
+# Lightweight planning workflow for audit strategy selection
+
+name: preflight
+version: "1.0"
+
+inputs:
+  source_type:
+    type: string
+    enum: [git, directory]
+    default: git
+  source_path:
+    type: string
+    required: true
+  branch:
+    type: string
+    default: main
+
+stages:
+  - id: load_source
+    name: "Load Source"
+    executor: source-loader
+    action: load
+    always: true
+    inputs:
+      source_type: "{{ inputs.source_type }}"
+      source_path: "{{ inputs.source_path }}"
+      branch: "{{ inputs.branch }}"
+    outputs:
+      - local_path
+      - source_info
+      - is_git_repo
+
+  - id: quick_scan
+    name: "Quick Scan"
+    executor: scanner
+    action: quick_scan
+    always: true
+    inputs:
+      path: "{{ stages.load_source.local_path }}"
+    outputs:
+      - file_count
+      - loc
+      - languages
+      - size_category
+      - estimated_scan_time
+      - structure
+
+  - id: detect_type
+    name: "Detect Project Type"
+    executor: type-detector
+    action: detect
+    always: true
+    inputs:
+      path: "{{ stages.load_source.local_path }}"
+      scan: "{{ stages.quick_scan }}"
+    outputs:
+      - project_type
+      - framework
+      - architecture
+      - maturity_level
+
+outputs:
+  files: "{{ stages.quick_scan.file_count }}"
+  loc: "{{ stages.quick_scan.loc }}"
+  languages: "{{ stages.quick_scan.languages }}"
+  project_type: "{{ stages.detect_type.project_type }}"
+  framework: "{{ stages.detect_type.framework }}"
+  architecture: "{{ stages.detect_type.architecture }}"
+  maturity_level: "{{ stages.detect_type.maturity_level }}"

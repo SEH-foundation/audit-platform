@@ -20,3 +20,8 @@ redis>=5.0.0            # Redis cache
 # ruff           # Python linter
 # bandit         # Python security
 # semgrep        # Multi-language security
+
+# Optional document parsers (for contract/policy loading)
+# pymupdf        # PDF parsing (preferred)
+# pdfplumber     # PDF parsing (fallback)
+# python-docx    # DOCX parsing

@@ -24,6 +24,7 @@ python3 -m gateway.mcp.http_server
 ### 2. З PostgreSQL та Redis
 
 ```bash
+INFRA_ENV_PATH=/Users/maksymdemchenko/AI-Platform-ISO-main/infrastructure/.env \
 DATABASE_URL=postgres://user:pass@localhost:5432/audit \
 REDIS_URL=redis://localhost:6379 \
 python3 -m gateway.mcp.http_server
@@ -33,6 +34,7 @@ python3 -m gateway.mcp.http_server
 
 ```bash
 # Встановіть змінні оточення:
+INFRA_ENV_PATH=/path/to/infrastructure/.env
 DATABASE_URL=postgres://...
 REDIS_URL=redis://...
 SERVER_URL=https://your-domain.railway.app
@@ -68,13 +70,13 @@ PORT=8090
 | `/api/tools` | GET | Список інструментів |
 | `/api/rates` | GET | Регіональні ставки |
 
-## Інструменти (23)
-
-### Audit Tools (17)
+## Інструменти (основні)
 
 | Інструмент | Опис |
 |------------|------|
 | `audit` | Повний аудит репозиторію |
+| `audit_preflight` | Планувальник перед аудитом (goal/policy/region) |
+| `estimate_cost` | Стандартна оцінка вартості (COCOMO II Modern) |
 | `estimate_cocomo` | COCOMO II Modern оцінка |
 | `estimate_comprehensive` | Всі 8 методологій |
 | `estimate_methodology` | Одна методологія |
@@ -85,12 +87,36 @@ PORT=8090
 | `get_regional_costs` | Вартість по 8 регіонах |
 | `get_formulas` | Всі формули |
 | `get_constants` | Всі константи |
-| `upload_document` | Завантаження документів |
+| `upload_document` | Завантаження документів (text/markdown) |
+| `upload_document_file` | Завантаження документів (file_path) |
 | `list_policies` | Список політик |
 | `explain_metric` | Пояснення метрики |
 | `explain_product_level` | Пояснення рівня продукту |
 | `get_recommendations` | Рекомендації |
 | `load_results` | Завантаження результатів |
+
+### Preflight (MCP)
+
+```bash
+# Preflight plan
+curl -X POST http://localhost:8090/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"audit_preflight","arguments":{"source":"/path/to/repo","goal":"quality","policy_id":"standard","region":"eu","branch":"main"}}}'
+
+# Use recommended task
+curl -X POST http://localhost:8090/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"audit","arguments":{"source":"/path/to/repo","task":"check_quality","policy_id":"standard","region":"eu","branch":"main"}}}'
+```
+
+### Export Results
+
+```bash
+curl -X POST http://localhost:8090/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"export_results","arguments":{"analysis_id":"abc123","format":"pdf"}}}'
+```
+Exports are saved under `{MCP_WORKSPACE_ROOT}/{workspace}/exports`.
 
 ### Memory Tools (6)
 
@@ -306,6 +332,7 @@ CREATE TABLE analysis_results (
 |--------|------|---------|
 | `PORT` | Порт сервера | 8090 |
 | `SERVER_URL` | URL сервера | http://localhost:8090 |
+| `INFRA_ENV_PATH` | Path to infrastructure `.env` (loaded before reading DB/Redis) | (not set) |
 | `DATABASE_URL` | PostgreSQL URL | (in-memory) |
 | `REDIS_URL` | Redis URL | (in-memory) |
 

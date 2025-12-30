@@ -34,24 +34,37 @@ pip install -r requirements.txt
 ### 2. Configure environment
 
 ```bash
-cp .env.example .env
-# Add your GROQ_API_KEY
+export INFRA_ENV_PATH=/Users/maksymdemchenko/AI-Platform-ISO-main/infrastructure/.env
+# Optional overrides:
+export DATABASE_URL=postgres://user:pass@localhost:5432/audit
+export REDIS_URL=redis://localhost:6379
 ```
 
-### 3. Run the API
+### 3. Run MCP HTTP server
+
+```bash
+python -m gateway.mcp.http_server
+# UI and MCP server available at http://localhost:8090
+```
+
+### 4. Run the API (optional)
 
 ```bash
 python -m gateway.api.main
 # API available at http://localhost:8080
 ```
 
-### 4. Open Web UI
-
-Open `ui/index.html` in browser or serve with:
+### 5. Run CLI audit (optional)
 
 ```bash
-python -m http.server 3000 -d ui
+python -m run --source /path/to/repo --task quick_scan
 ```
+
+## Documentation
+
+- `docs/GETTING_STARTED.md` - full setup and usage
+- `docs/ESTIMATION_FORMULAS.md` - fixed formulas and where they are used
+- `docs/MCP_WEB_SERVER.md` - MCP server details and UI
 
 ## Usage with Claude (MCP)
 
@@ -74,15 +87,59 @@ Then in Claude:
 - "Explain what repo_health score means"
 - "What level is this project and how to improve it?"
 
+## Security Configuration (Recommended)
+
+Set these environment variables for production deployments:
+
+- `REQUIRE_AUTH=true` to enforce bearer token auth on MCP and API endpoints.
+- `MCP_AUTH_TOKENS=token1,token2` to define allowed static tokens.
+- `OAUTH_ALLOWED_CLIENT_IDS=...` to allow only known OAuth client IDs.
+- `OAUTH_REDIRECT_DOMAINS=claude.ai,app.claude.ai` to restrict redirect hosts.
+- `ALLOWED_ORIGINS=https://claude.ai,https://app.claude.ai,https://seh.foundation` for CORS.
+- `ALLOWED_REPO_HOSTS=github.com,gitlab.com` to restrict repo cloning.
+- `MCP_WORKSPACE_ROOT=/tmp/mcp_workspaces` to isolate cloned repos.
+- `ENABLE_DANGEROUS_TOOLS=false` to disable `run_script`, `run_tests`, `check_lint`, `check_types`, `find_duplicates`.
+- `MCP_TOOL_POLICY=production|internal|dev` to control safe vs privileged tools.
+- `STRICT_ESTIMATION=true` to enforce validation bounds on estimates.
+- `RATE_MIN`, `RATE_MAX`, `HOURS_PER_KLOC_MIN`, `HOURS_PER_KLOC_MAX` to override validation bounds.
+
+Tool policy tiers:
+- `production`: safe tools only
+- `internal`: safe + privileged tools
+- `dev`: all tools (still blocked by `ENABLE_DANGEROUS_TOOLS=false` unless explicitly enabled)
+
+Dangerous tools (disabled by default):
+- `run_script`, `run_tests`, `check_lint`, `check_types`, `find_duplicates`
+
+Privileged tools (require `MCP_TOOL_POLICY=internal` or `dev`):
+- `clone_repo`, `analyze_repo`, `scan_security`, `analyze_complexity`, `generate_report`, `export_results`, `batch_analyze`
+- `upload_document`, `upload_document_file`, `get_document`, `delete_document`
+- `update_settings`, `load_results`, `list_policies`
+
+Renamed tool:
+- `upload_document_file` (file_path based upload). This replaces the old `upload_document` file tool name.
+
 ## Available Tools (MCP)
 
-| Tool | Description |
-|------|-------------|
-| `audit_repository` | Full repository audit |
-| `explain_metric` | Explain metrics for non-technical users |
-| `explain_product_level` | Explain product classification |
-| `get_recommendations` | Get improvement recommendations |
-| `compare_with_contract` | Compare with requirements |
+See:
+- `TOOLS.md` (policy tiers)
+- `docs/MCP_WEB_SERVER.md` (HTTP MCP server usage)
+
+## Report Chunking
+
+The `generate_report` tool supports chunking for large outputs:
+
+```json
+{
+  "name": "generate_report",
+  "arguments": {
+    "analysis_id": "abc123",
+    "sections": ["summary", "metrics", "estimation"],
+    "format": "markdown",
+    "chunking": { "mode": "by_size", "max_chars": 20000 }
+  }
+}
+```
 
 ## Scoring
 

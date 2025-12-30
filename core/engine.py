@@ -5,6 +5,7 @@ Orchestrates workflows using YAML definitions
 import yaml
 import asyncio
 import logging
+import ast
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -118,7 +119,7 @@ class AuditEngine:
                 })
 
             # Check skip conditions
-            if self._should_skip_stage(stage, inputs):
+            if self._should_skip_stage(stage, context):
                 results[stage_id] = StageResult(
                     stage_id=stage_id,
                     status=StageStatus.SKIPPED
@@ -160,12 +161,71 @@ class AuditEngine:
             "outputs": self._collect_outputs(workflow, context)
         }
 
-    def _should_skip_stage(self, stage: dict, inputs: dict) -> bool:
-        """Check if stage should be skipped based on profile"""
+    def _should_skip_stage(self, stage: dict, context: WorkflowContext) -> bool:
+        """Check if stage should be skipped based on conditions."""
+        if stage.get("always"):
+            return False
+
         skip_on = stage.get("skip_on_profile")
-        if skip_on and inputs.get("profile") == skip_on:
+        if skip_on and context.inputs.get("profile") == skip_on:
             return True
+
+        run_if = stage.get("run_if")
+        if run_if is not None and not self._evaluate_run_if(run_if, context):
+            return True
+
+        requires = stage.get("requires")
+        if requires and not self._requirements_met(requires, context):
+            return True
+
         return False
+
+    def _evaluate_run_if(self, expression: Any, context: WorkflowContext) -> bool:
+        """Evaluate a run_if expression against inputs and stages."""
+        if isinstance(expression, bool):
+            return expression
+        if not isinstance(expression, str):
+            return bool(expression)
+        expr = expression.strip()
+        if expr.startswith("{{") and expr.endswith("}}"):
+            expr = expr[2:-2].strip()
+        try:
+            return bool(self._safe_eval_expr(expr, {
+                "inputs": context.inputs,
+                "stages": context.stages,
+                "context": context,
+            }))
+        except Exception as exc:
+            logger.warning(f"Failed to evaluate run_if '{expression}': {exc}")
+            return False
+
+    def _requirements_met(self, requires: Any, context: WorkflowContext) -> bool:
+        """Check whether stage requirements are satisfied."""
+        if isinstance(requires, list):
+            return all(self._single_requirement_met(req, context) for req in requires)
+        return self._single_requirement_met(requires, context)
+
+    def _single_requirement_met(self, requirement: Any, context: WorkflowContext) -> bool:
+        if isinstance(requirement, bool):
+            return requirement
+        if not isinstance(requirement, str):
+            return bool(requirement)
+        req = requirement.strip()
+        if req.startswith("{{") and req.endswith("}}"):
+            req = req[2:-2].strip()
+
+        parts = req.split(".")
+        value = None
+        if parts[0] == "inputs" and len(parts) > 1:
+            value = context.inputs.get(parts[1])
+        elif parts[0] == "stages" and len(parts) > 1:
+            stage_outputs = context.stages.get(parts[1], {})
+            value = stage_outputs.get(parts[2]) if len(parts) > 2 else stage_outputs
+        else:
+            stage_outputs = context.stages.get(parts[0], {})
+            value = stage_outputs.get(parts[1]) if len(parts) > 1 else stage_outputs
+
+        return bool(value)
 
     async def _execute_stage(self, stage: dict, context: WorkflowContext) -> StageResult:
         """Execute a single workflow stage"""
@@ -173,22 +233,20 @@ class AuditEngine:
         executor_name = stage.get("executor", "core")
 
         if executor_name not in self.executors:
-            # Use mock executor for missing executors
-            logger.warning(f"No executor for {executor_name}, using mock")
-            outputs = {"mock": True, "stage": stage["id"]}
+            raise ValueError(f"No executor registered for '{executor_name}'")
+
+        executor = self.executors[executor_name]
+        action = stage.get("action", "run")
+
+        # Resolve inputs
+        resolved_inputs = self._resolve_inputs(stage.get("inputs", {}), context)
+
+        # Execute
+        method = getattr(executor, action, None)
+        if method:
+            outputs = await method(**resolved_inputs)
         else:
-            executor = self.executors[executor_name]
-            action = stage.get("action", "run")
-
-            # Resolve inputs
-            resolved_inputs = self._resolve_inputs(stage.get("inputs", {}), context)
-
-            # Execute
-            method = getattr(executor, action, None)
-            if method:
-                outputs = await method(**resolved_inputs)
-            else:
-                outputs = await executor.run(action, resolved_inputs)
+            outputs = await executor.run(action, resolved_inputs)
 
         duration = (datetime.now() - start_time).total_seconds() * 1000
 
@@ -287,8 +345,88 @@ class AuditEngine:
     def _check_condition(self, condition: str, value: Any) -> bool:
         """Evaluate a simple condition"""
         if "==" in condition:
-            return value == eval(condition.split("==")[1].strip())
+            rhs = condition.split("==")[1].strip()
+            try:
+                expected = ast.literal_eval(rhs)
+            except Exception:
+                expected = rhs.strip("\"'")
+            return value == expected
         return True
+
+    def _safe_eval_expr(self, expr: str, context: dict) -> Any:
+        """Safely evaluate a limited expression (no calls)."""
+        node = ast.parse(expr, mode="eval")
+
+        def resolve(node_obj: ast.AST) -> Any:
+            if isinstance(node_obj, ast.Expression):
+                return resolve(node_obj.body)
+            if isinstance(node_obj, ast.Constant):
+                return node_obj.value
+            if isinstance(node_obj, ast.Name):
+                if node_obj.id in context:
+                    return context[node_obj.id]
+                if node_obj.id in {"True", "False", "None"}:
+                    return {"True": True, "False": False, "None": None}[node_obj.id]
+                raise ValueError(f"Unknown name: {node_obj.id}")
+            if isinstance(node_obj, ast.List):
+                return [resolve(elt) for elt in node_obj.elts]
+            if isinstance(node_obj, ast.Tuple):
+                return tuple(resolve(elt) for elt in node_obj.elts)
+            if isinstance(node_obj, ast.UnaryOp) and isinstance(node_obj.op, ast.Not):
+                return not resolve(node_obj.operand)
+            if isinstance(node_obj, ast.BoolOp):
+                if isinstance(node_obj.op, ast.And):
+                    return all(resolve(v) for v in node_obj.values)
+                if isinstance(node_obj.op, ast.Or):
+                    return any(resolve(v) for v in node_obj.values)
+            if isinstance(node_obj, ast.Compare):
+                left = resolve(node_obj.left)
+                for op, comparator in zip(node_obj.ops, node_obj.comparators):
+                    right = resolve(comparator)
+                    if isinstance(op, ast.In):
+                        if left not in right:
+                            return False
+                    elif isinstance(op, ast.NotIn):
+                        if left in right:
+                            return False
+                    elif isinstance(op, ast.Eq):
+                        if left != right:
+                            return False
+                    elif isinstance(op, ast.NotEq):
+                        if left == right:
+                            return False
+                    elif isinstance(op, ast.Gt):
+                        if left <= right:
+                            return False
+                    elif isinstance(op, ast.GtE):
+                        if left < right:
+                            return False
+                    elif isinstance(op, ast.Lt):
+                        if left >= right:
+                            return False
+                    elif isinstance(op, ast.LtE):
+                        if left > right:
+                            return False
+                    else:
+                        raise ValueError("Unsupported comparison operator")
+                    left = right
+                return True
+            if isinstance(node_obj, ast.Attribute):
+                base = resolve(node_obj.value)
+                if isinstance(base, dict):
+                    return base.get(node_obj.attr)
+                return getattr(base, node_obj.attr, None)
+            if isinstance(node_obj, ast.Subscript):
+                base = resolve(node_obj.value)
+                key = resolve(node_obj.slice)
+                if isinstance(base, dict):
+                    return base.get(key)
+                return base[key]
+            if isinstance(node_obj, ast.Index):
+                return resolve(node_obj.value)
+            raise ValueError("Unsupported expression")
+
+        return resolve(node)
 
     def _check_threshold(self, threshold: str, value: Any) -> bool:
         """Check threshold conditions like '>= 80'"""

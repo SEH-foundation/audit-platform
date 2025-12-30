@@ -37,11 +37,32 @@ from starlette.routing import Route
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 
+# Load infra env early (before reading DATABASE_URL/REDIS_URL)
+def _load_env_file(path: str) -> bool:
+    if not path or not os.path.exists(path):
+        return False
+    try:
+        with open(path, "r") as env_file:
+            for line in env_file:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                key, value = stripped.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+        return True
+    except Exception as exc:
+        logging.getLogger(__name__).warning(f"Failed to load env file {path}: {exc}")
+        return False
+
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 # Import existing MCP server
 from gateway.mcp.server import AuditMCPServer, FORMULAS_AVAILABLE
+from core.workspace.workspace import AuditWorkspace
 
 # Try to import formulas
 try:
@@ -64,9 +85,51 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION
 # =============================================================================
 
+_load_env_file(os.environ.get("INFRA_ENV_PATH", "/Users/maksymdemchenko/AI-Platform-ISO-main/infrastructure/.env"))
+
 SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:8090")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 REDIS_URL = os.environ.get("REDIS_URL", "")
+
+# Security controls
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        "ALLOWED_ORIGINS",
+        "https://claude.ai,https://app.claude.ai,https://seh.foundation,https://www.seh.foundation",
+    ).split(",")
+    if origin.strip()
+]
+REQUIRE_AUTH = os.environ.get("REQUIRE_AUTH", "true").lower() in {"1", "true", "yes"}
+MCP_AUTH_TOKENS = [
+    token.strip()
+    for token in os.environ.get("MCP_AUTH_TOKENS", "").split(",")
+    if token.strip()
+]
+ALLOWED_OAUTH_CLIENT_IDS = [
+    client_id.strip()
+    for client_id in os.environ.get("OAUTH_ALLOWED_CLIENT_IDS", "").split(",")
+    if client_id.strip()
+]
+OAUTH_REDIRECT_DOMAINS = [
+    domain.strip()
+    for domain in os.environ.get("OAUTH_REDIRECT_DOMAINS", "").split(",")
+    if domain.strip()
+]
+ALLOWED_REPO_HOSTS = [
+    host.strip()
+    for host in os.environ.get("ALLOWED_REPO_HOSTS", "github.com,gitlab.com").split(",")
+    if host.strip()
+]
+ENABLE_DANGEROUS_TOOLS = os.environ.get("ENABLE_DANGEROUS_TOOLS", "false").lower() in {"1", "true", "yes"}
+DISABLED_TOOLS = {
+    name.strip()
+    for name in os.environ.get("DISABLED_TOOLS", "").split(",")
+    if name.strip()
+}
+WORKSPACE_ROOT = os.environ.get("MCP_WORKSPACE_ROOT", "/tmp/mcp_workspaces")
+MCP_TOOL_POLICY = os.environ.get("MCP_TOOL_POLICY", "production").lower()
+STRICT_ESTIMATION = os.environ.get("STRICT_ESTIMATION", "true").lower() in {"1", "true", "yes"}
 
 # =============================================================================
 # DATABASE (PostgreSQL)
@@ -1599,26 +1662,16 @@ BUSINESS_TOOLS = [
     },
     {
         "name": "estimate_cost",
-        "description": "Estimate development cost based on complexity and profile.",
+        "description": "Standard cost estimate (COCOMO II Modern). Requires LOC.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "complexity": {
-                    "type": "string",
-                    "enum": ["S", "M", "L", "XL"],
-                    "description": "Project complexity: S (<160h), M (160-500h), L (500-1200h), XL (>1200h)"
-                },
-                "profile_id": {
-                    "type": "string",
-                    "description": "Evaluation profile ID (eu_standard, ua_standard, etc.)"
-                },
-                "tech_debt_multiplier": {
-                    "type": "number",
-                    "description": "Tech debt adjustment (1.0-1.5)",
-                    "default": 1.0
-                }
+                "loc": {"type": "integer", "description": "Lines of code"},
+                "region": {"type": "string", "description": "Region code (ua, eu, us, etc.)"},
+                "tech_debt_score": {"type": "integer", "description": "Tech debt score 0-15", "default": 10},
+                "team_experience": {"type": "string", "enum": ["low", "nominal", "high"], "default": "nominal"}
             },
-            "required": ["complexity", "profile_id"]
+            "required": ["loc"]
         }
     },
     {
@@ -1770,6 +1823,94 @@ BUSINESS_TOOLS = [
     },
 ]
 
+DANGEROUS_TOOLS = {
+    "run_script",
+    "run_tests",
+    "check_lint",
+    "check_types",
+    "find_duplicates",
+}
+
+if not ENABLE_DANGEROUS_TOOLS:
+    DISABLED_TOOLS.update(DANGEROUS_TOOLS)
+
+SAFE_TOOLS = {
+    # Core audit + estimation
+    "audit",
+    "audit_preflight",
+    "estimate_cocomo",
+    "estimate_comprehensive",
+    "estimate_methodology",
+    "list_methodologies",
+    "estimate_pert",
+    "estimate_ai_efficiency",
+    "calculate_roi",
+    "get_regional_costs",
+    "get_formulas",
+    "get_constants",
+    # Explanations + recommendations
+    "explain_metric",
+    "explain_product_level",
+    "get_recommendations",
+    # Business tools
+    "list_profiles",
+    "list_contracts",
+    "estimate_cost",
+    "check_readiness",
+    "check_compliance",
+    "generate_document",
+    "get_template_variables",
+    "calculate_scores",
+    "get_scoring_rubric",
+    # Memory/validation
+    "store_memory",
+    "recall_memory",
+    "record_decision",
+    "record_learning",
+    "get_context",
+    "validate_estimate",
+    "get_settings",
+    "estimate_custom",
+    "compare_estimates",
+}
+
+PRIVILEGED_TOOLS = {
+    "clone_repo",
+    "analyze_repo",
+    "scan_security",
+    "analyze_complexity",
+    "generate_report",
+    "export_results",
+    "batch_analyze",
+    "upload_document",
+    "upload_document_file",
+    "get_document",
+    "delete_document",
+    "update_settings",
+    "load_results",
+    "list_policies",
+}
+
+KNOWN_TOOLS = SAFE_TOOLS | PRIVILEGED_TOOLS | DANGEROUS_TOOLS
+
+
+def _is_tool_allowed(name: str) -> bool:
+    if name in DISABLED_TOOLS:
+        return False
+    if MCP_TOOL_POLICY == "dev":
+        return True
+    if name not in KNOWN_TOOLS:
+        return False
+    if MCP_TOOL_POLICY == "internal":
+        return name in SAFE_TOOLS or name in PRIVILEGED_TOOLS
+    # production default
+    return name in SAFE_TOOLS
+
+
+def filter_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Filter tools that are disabled by server policy."""
+    return [tool for tool in tools if _is_tool_allowed(tool.get("name"))]
+
 
 # =============================================================================
 # TEMPLATE ENGINE
@@ -1856,6 +1997,170 @@ template_engine = TemplateEngine()
 
 
 # =============================================================================
+# ANALYSIS PERSISTENCE
+# =============================================================================
+
+def _stage_outputs(results: Dict[str, Any], stage_id: str) -> Dict[str, Any]:
+    stage = results.get("stages", {}).get(stage_id, {})
+    if isinstance(stage, dict):
+        outputs = stage.get("outputs", stage)
+        return outputs if isinstance(outputs, dict) else {}
+    return {}
+
+
+def _load_executor(module_name: str):
+    """Load an executor module from executors/<module_name>/executor.py."""
+    import importlib.util
+
+    base_dir = Path(__file__).parent.parent.parent / "executors"
+    module_path = base_dir / module_name / "executor.py"
+    if not module_path.exists():
+        raise FileNotFoundError(f"Executor not found: {module_name}")
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _infer_repo_name(source: str) -> Optional[str]:
+    if not source:
+        return None
+    if source.startswith(("http://", "https://", "git@")):
+        return source.rstrip("/").split("/")[-1].replace(".git", "")
+    return Path(source).name
+
+
+def _ensure_workspace(workspace_id: str, region: Optional[str] = None) -> AuditWorkspace:
+    ws_path = Path(WORKSPACE_ROOT) / workspace_id
+    if ws_path.exists():
+        return AuditWorkspace(str(ws_path))
+    return AuditWorkspace.init(str(ws_path), name=workspace_id, region=region or "ua")
+
+
+def _normalize_audit_results(audit_output: Dict[str, Any], inputs: Dict[str, Any]) -> Dict[str, Any]:
+    meta = audit_output.get("meta", {})
+    results = audit_output.get("results", {}) if isinstance(audit_output.get("results"), dict) else {}
+
+    quick_scan = _stage_outputs(results, "quick_scan")
+    load_source = _stage_outputs(results, "load_source")
+    readiness = _stage_outputs(results, "readiness_check")
+    quality = _stage_outputs(results, "quality_analysis")
+    compliance = _stage_outputs(results, "compliance_check")
+    cost = _stage_outputs(results, "cost_estimation")
+    report = _stage_outputs(results, "report")
+    full_audit = _stage_outputs(results, "full_audit")
+
+    cost_estimate = {}
+    if cost:
+        cost_estimate = {
+            "methodology": cost.get("standard_method") or cost.get("methodology") or "cocomo_modern_v1",
+            "hours": {
+                "min": cost.get("dev_hours_min"),
+                "typical": cost.get("estimated_hours"),
+                "max": cost.get("dev_hours_max"),
+            },
+            "cost": {
+                "typical": cost.get("estimated_cost_usd") or cost.get("dev_cost_usd"),
+                "local": cost.get("dev_cost_local"),
+            },
+            "timeline_weeks": cost.get("timeline_weeks"),
+            "team_size": cost.get("team_size") or cost.get("team_size_recommended"),
+            "assumptions": cost.get("assumptions", []),
+            "inputs": cost.get("inputs", {}),
+        }
+
+    normalized = {
+        "analysis_id": results.get("analysis_id") or audit_output.get("analysis_id"),
+        "source": meta.get("source") or inputs.get("source"),
+        "repo_path": load_source.get("local_path") or inputs.get("source"),
+        "timestamp": meta.get("timestamp") or datetime.now(timezone.utc).isoformat(),
+        "task": meta.get("task") or inputs.get("task"),
+        "region": inputs.get("region"),
+        "metrics": {
+            "loc_total": quick_scan.get("loc"),
+            "file_count": quick_scan.get("file_count"),
+            "languages": quick_scan.get("languages"),
+            "size_category": quick_scan.get("size_category"),
+            "estimated_scan_time": quick_scan.get("estimated_scan_time"),
+        },
+        "structure": quick_scan.get("structure", {}),
+        "git": load_source.get("source_info", {}),
+        "readiness": readiness,
+        "quality": quality,
+        "compliance": compliance,
+        "full_audit": full_audit,
+        "report": report,
+        "scores": results.get("scores", {}),
+        "stages": results.get("stages", {}),
+    }
+    if cost_estimate:
+        normalized["cost_estimate"] = cost_estimate
+    if report.get("warnings"):
+        normalized["warnings"] = report.get("warnings")
+    if report.get("summary"):
+        normalized["summary"] = report.get("summary")
+    return normalized
+
+
+def _store_analysis_db(workspace_id: str, analysis_id: str, normalized: Dict[str, Any]) -> bool:
+    if not db_connection:
+        return False
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute(
+            """
+            INSERT INTO analysis_results
+                (id, workspace_id, repo_url, repo_name, metrics, scores, cost_estimate, validation, status)
+            VALUES
+                (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                repo_url = EXCLUDED.repo_url,
+                repo_name = EXCLUDED.repo_name,
+                metrics = EXCLUDED.metrics,
+                scores = EXCLUDED.scores,
+                cost_estimate = EXCLUDED.cost_estimate,
+                validation = EXCLUDED.validation,
+                status = EXCLUDED.status
+            """,
+            (
+                analysis_id,
+                workspace_id,
+                normalized.get("source"),
+                _infer_repo_name(normalized.get("source", "")),
+                json.dumps(normalized.get("metrics", {})),
+                json.dumps(normalized.get("scores", {})),
+                json.dumps(normalized.get("cost_estimate", {})),
+                json.dumps(normalized.get("validation", {})),
+                "completed",
+            ),
+        )
+        db_connection.commit()
+        return True
+    except Exception as exc:
+        logger.error(f"Failed to store analysis in DB: {exc}")
+        return False
+
+
+def _persist_audit_results(audit_output: Dict[str, Any], inputs: Dict[str, Any], workspace_id: str) -> Dict[str, Any]:
+    normalized = _normalize_audit_results(audit_output, inputs)
+    analysis_id = normalized.get("analysis_id") or str(uuid.uuid4())[:8]
+    normalized["analysis_id"] = analysis_id
+    stored_workspace = False
+    try:
+        ws = _ensure_workspace(workspace_id, region=normalized.get("region"))
+        ws.save_analysis(analysis_id, normalized)
+        stored_workspace = True
+    except Exception as exc:
+        logger.error(f"Failed to store analysis in workspace: {exc}")
+    stored_db = _store_analysis_db(workspace_id, analysis_id, normalized)
+    return {
+        "analysis_id": analysis_id,
+        "stored_workspace": stored_workspace,
+        "stored_db": stored_db,
+    }
+
+
+# =============================================================================
 # BUSINESS TOOL HANDLERS
 # =============================================================================
 
@@ -1889,55 +2194,47 @@ def handle_list_contracts() -> Dict:
 
 
 def handle_estimate_cost(arguments: Dict) -> Dict:
-    """Estimate development cost based on complexity and profile."""
-    complexity = arguments.get('complexity', 'M')
-    profile_id = arguments.get('profile_id', 'eu_standard')
-    multiplier = arguments.get('tech_debt_multiplier', 1.0)
+    """Estimate development cost using standard COCOMO method."""
+    loc = int(arguments.get("loc") or 0)
+    if loc <= 0:
+        return {"error": "loc is required"}
 
-    profile = PROFILES.get(profile_id)
-    if not profile:
-        return {"error": f"Unknown profile: {profile_id}"}
+    region = arguments.get("region", "ua")
+    tech_debt_score = int(arguments.get("tech_debt_score", 10))
+    team_experience = arguments.get("team_experience", "nominal")
 
-    # Base hours by complexity
-    hours = {
-        'S': {'min': 80, 'typical': 120, 'max': 160},
-        'M': {'min': 160, 'typical': 320, 'max': 500},
-        'L': {'min': 500, 'typical': 800, 'max': 1200},
-        'XL': {'min': 1200, 'typical': 2000, 'max': 3000},
+    try:
+        from executors.cost_estimator.formulas import estimate_cocomo_modern, get_regional_cost
+    except Exception:
+        return {"error": "Cost estimator formulas not available"}
+
+    estimate = estimate_cocomo_modern(loc, tech_debt_score, team_experience)
+    hours = estimate.get("hours", {})
+    typical_hours = hours.get("typical", 0)
+    regional = get_regional_cost(typical_hours, region)
+    rate = regional.get("rates", {}).get("middle")
+
+    kloc = loc / 1000 if loc else 0
+    validation = validate_estimate(
+        total_hours=typical_hours,
+        total_cost=regional.get("cost", {}).get("typical"),
+        kloc=kloc,
+        hourly_rate=rate,
+        workspace_id="global",
+    )
+
+    result = {
+        "method": estimate.get("methodology"),
+        "inputs": estimate.get("inputs"),
+        "hours": hours,
+        "region": regional.get("region"),
+        "currency": regional.get("currency"),
+        "cost": regional.get("cost"),
+        "validation": validation,
     }
-
-    h = hours.get(complexity, hours['M'])
-    rate = profile['hourly']['middle']
-    currency = profile['currency']
-
-    min_h = int(h['min'] * multiplier)
-    typ_h = int(h['typical'] * multiplier)
-    max_h = int(h['max'] * multiplier)
-
-    return {
-        "profile": profile['name'],
-        "complexity": complexity,
-        "tech_debt_multiplier": multiplier,
-        "hours": {
-            "min": min_h,
-            "typical": typ_h,
-            "max": max_h,
-        },
-        "cost": {
-            "min": min_h * rate,
-            "typical": typ_h * rate,
-            "max": max_h * rate,
-            "currency": currency,
-        },
-        "rate": rate,
-        "breakdown": {
-            "analysis": {"hours": int(typ_h * 0.1), "cost": int(typ_h * 0.1 * rate)},
-            "design": {"hours": int(typ_h * 0.15), "cost": int(typ_h * 0.15 * rate)},
-            "development": {"hours": int(typ_h * 0.45), "cost": int(typ_h * 0.45 * rate)},
-            "testing": {"hours": int(typ_h * 0.2), "cost": int(typ_h * 0.2 * rate)},
-            "documentation": {"hours": int(typ_h * 0.1), "cost": int(typ_h * 0.1 * rate)},
-        }
-    }
+    if STRICT_ESTIMATION and not validation["valid"]:
+        return {"error": "Estimate failed validation", "validation": validation}
+    return result
 
 
 def handle_check_readiness(arguments: Dict) -> Dict:
@@ -2150,9 +2447,12 @@ def handle_clone_repo(arguments: Dict) -> Dict:
 
     if not url:
         return {"error": "URL is required"}
+    if not _is_repo_url_allowed(url):
+        return {"error": "Repository URL not allowed"}
 
     # Create temp directory
-    temp_dir = tempfile.mkdtemp(prefix='repo_')
+    _ensure_workspace_root()
+    temp_dir = tempfile.mkdtemp(prefix='repo_', dir=WORKSPACE_ROOT)
     try:
         result = subprocess.run(
             ['git', 'clone', '--depth', '1', '--branch', branch, url, temp_dir],
@@ -2184,6 +2484,8 @@ def handle_analyze_repo(arguments: Dict) -> Dict:
 
     if not path or not os.path.exists(path):
         return {"error": "Valid path is required"}
+    if not _is_safe_path(path):
+        return {"error": "Path not allowed"}
 
     result = {"path": path, "metrics": {}}
 
@@ -2239,6 +2541,8 @@ def handle_scan_security(arguments: Dict) -> Dict:
 
     if not path or not os.path.exists(path):
         return {"error": "Valid path is required"}
+    if not _is_safe_path(path):
+        return {"error": "Path not allowed"}
 
     results = {"path": path, "findings": []}
 
@@ -2271,6 +2575,8 @@ def handle_scan_security(arguments: Dict) -> Dict:
                     except:
                         pass
 
+    if "validation" in results and STRICT_ESTIMATION and not results["validation"]["valid"]:
+        return {"error": "Estimate failed validation", "validation": results["validation"]}
     return results
 
 
@@ -2314,6 +2620,8 @@ def handle_run_tests(arguments: Dict) -> Dict:
 
     if not path or not os.path.exists(path):
         return {"error": "Valid path is required"}
+    if not _is_safe_path(path):
+        return {"error": "Path not allowed"}
 
     # Auto-detect framework
     if framework == 'auto':
@@ -2353,6 +2661,8 @@ def handle_check_lint(arguments: Dict) -> Dict:
 
     if not path or not os.path.exists(path):
         return {"error": "Valid path is required"}
+    if not _is_safe_path(path):
+        return {"error": "Path not allowed"}
 
     # Auto-detect language
     if language == 'auto':
@@ -2390,6 +2700,8 @@ def handle_check_types(arguments: Dict) -> Dict:
 
     if not path or not os.path.exists(path):
         return {"error": "Valid path is required"}
+    if not _is_safe_path(path):
+        return {"error": "Path not allowed"}
 
     try:
         # Try pyright for Python
@@ -2413,6 +2725,8 @@ def handle_find_duplicates(arguments: Dict) -> Dict:
 
     if not path or not os.path.exists(path):
         return {"error": "Valid path is required"}
+    if not _is_safe_path(path):
+        return {"error": "Path not allowed"}
 
     try:
         result = subprocess.run(
@@ -2437,6 +2751,8 @@ def handle_analyze_complexity(arguments: Dict) -> Dict:
 
     if not path or not os.path.exists(path):
         return {"error": "Valid path is required"}
+    if not _is_safe_path(path):
+        return {"error": "Path not allowed"}
 
     # Simple complexity analysis for Python files
     complexities = []
@@ -2475,11 +2791,26 @@ def handle_analyze_complexity(arguments: Dict) -> Dict:
     }
 
 
-def handle_generate_report(arguments: Dict, workspace_id: str) -> Dict:
+async def handle_generate_report(arguments: Dict, workspace_id: str) -> Dict:
     """Generate comprehensive audit report."""
     analysis_id = arguments.get('analysis_id')
     sections = arguments.get('sections', ['summary', 'metrics', 'estimation'])
     format_type = arguments.get('format', 'markdown')
+    chunking = arguments.get('chunking', {})
+    chunk_mode = chunking.get('mode', 'by_size') if isinstance(chunking, dict) else 'by_size'
+    max_chars = chunking.get('max_chars', 20000) if isinstance(chunking, dict) else 20000
+
+    analysis_payload = arguments.get("analysis") or arguments.get("results")
+    task = arguments.get("task", "")
+    stages = None
+    scores = None
+
+    if analysis_payload:
+        if isinstance(analysis_payload, dict) and "results" in analysis_payload:
+            analysis_payload = analysis_payload["results"]
+        if isinstance(analysis_payload, dict):
+            stages = analysis_payload.get("stages")
+            scores = analysis_payload.get("scores")
 
     report = {
         "generated_at": datetime.now().isoformat(),
@@ -2487,23 +2818,102 @@ def handle_generate_report(arguments: Dict, workspace_id: str) -> Dict:
         "format": format_type,
     }
 
-    # If we have an analysis_id, try to load it
-    if analysis_id:
-        report["analysis_id"] = analysis_id
+    if not stages and analysis_id:
+        try:
+            from core.workspace.workspace import AuditWorkspace
+            ws_path = str(Path(WORKSPACE_ROOT) / workspace_id)
+            ws = AuditWorkspace.init(ws_path)
+            analysis = ws.get_analysis(analysis_id)
+            if analysis:
+                stages = analysis.get("stages")
+                scores = analysis.get("scores")
+                report["analysis_id"] = analysis_id
+        except Exception:
+            pass
+
+    if not stages or not scores:
+        return {"error": "Analysis data not provided or not found"}
+
+    try:
+        reporter_module = _load_executor("report-generator")
+        reporter = reporter_module.create_executor()
+        generated = await reporter.generate(task=task, stages=stages, scores=scores)
+    except Exception as exc:
+        return {"error": f"Report generation failed: {exc}"}
+
+    if format_type in {"markdown", "text"}:
+        body = generated.get("summary_md", "") or generated.get("summary", "")
+        report["content"] = body
+
+        if chunk_mode and max_chars and len(body) > max_chars:
+            chunks = []
+            current = []
+            current_len = 0
+            for line in body.splitlines(keepends=True):
+                if current_len + len(line) > max_chars and current:
+                    chunks.append("".join(current))
+                    current = []
+                    current_len = 0
+                current.append(line)
+                current_len += len(line)
+            if current:
+                chunks.append("".join(current))
+            report["chunks"] = [{"index": i + 1, "total": len(chunks), "content": chunk} for i, chunk in enumerate(chunks)]
 
     return report
 
 
-def handle_export_results(arguments: Dict) -> Dict:
+async def handle_export_results(arguments: Dict, workspace_id: str) -> Dict:
     """Export analysis results to file."""
-    analysis_id = arguments.get('analysis_id')
-    format_type = arguments.get('format', 'json')
+    analysis_id = arguments.get("analysis_id")
+    if not analysis_id:
+        return {"error": "analysis_id is required"}
 
-    return {
-        "format": format_type,
-        "analysis_id": analysis_id,
-        "status": "ready",
+    format_type = arguments.get("format", "json").lower()
+    format_map = {
+        "xlsx": "excel",
+        "csv": "excel",
+        "md": "markdown",
     }
+    export_format = format_map.get(format_type, format_type)
+
+    output_dir = arguments.get("output_dir")
+    if output_dir:
+        if not _is_safe_path(output_dir):
+            return {"error": "output_dir not allowed"}
+        export_dir = output_dir
+    else:
+        export_dir = str(Path(WORKSPACE_ROOT) / workspace_id / "exports")
+
+    try:
+        ws_path = str(Path(WORKSPACE_ROOT) / workspace_id)
+        ws = AuditWorkspace.init(ws_path)
+        analysis = ws.get_analysis(analysis_id)
+        if not analysis:
+            return {"error": f"Analysis not found: {analysis_id}"}
+
+        stages = analysis.get("stages", {})
+        scores = analysis.get("scores", {})
+        cost = analysis.get("cost_estimate", {})
+        task = analysis.get("task", "")
+
+        reporter_module = _load_executor("report-generator")
+        reporter = reporter_module.create_executor()
+        report = await reporter.generate(task=task, stages=stages, scores=scores)
+        report["analysis_id"] = analysis_id
+
+        exporter_module = _load_executor("export-service")
+        exporter = exporter_module.create_executor({"output_dir": export_dir})
+        exported = await exporter.export(report=report, format=export_format, scores=scores, cost=cost)
+
+        return {
+            "analysis_id": analysis_id,
+            "format": format_type,
+            "export": exported,
+        }
+    except Exception as exc:
+        logger.error(f"Export failed: {exc}")
+        return {"error": str(exc)}
 
 
 async def handle_batch_analyze(arguments: Dict) -> Dict:
@@ -2560,7 +2970,18 @@ async def execute_tool(name: str, arguments: Dict, workspace_id: str = "global")
     """Execute an MCP tool by name."""
     logger.info(f"Executing tool: {name} with args: {arguments}")
 
+    if not _is_tool_allowed(name):
+        return {"error": "Tool disabled by server policy", "tool": name}
+
     try:
+        if name == "audit":
+            result = await audit_server.handle_tool(name, arguments)
+            if not isinstance(result, dict) or result.get("error"):
+                return result
+            persisted = _persist_audit_results(result, arguments, workspace_id)
+            result.update(persisted)
+            return result
+
         # Memory tools
         if name == "store_memory":
             entry = MemoryPersistence.store_memory(
@@ -2711,10 +3132,10 @@ async def execute_tool(name: str, arguments: Dict, workspace_id: str = "global")
             return handle_analyze_complexity(arguments)
 
         elif name == "generate_report":
-            return handle_generate_report(arguments, workspace_id)
+            return await handle_generate_report(arguments, workspace_id)
 
         elif name == "export_results":
-            return handle_export_results(arguments)
+            return await handle_export_results(arguments, workspace_id)
 
         elif name == "batch_analyze":
             return await handle_batch_analyze(arguments)
@@ -2890,7 +3311,8 @@ def estimate_with_settings(
             hourly_rate=region_data["rate"],
             workspace_id=workspace_id
         )
-
+    if "validation" in results and STRICT_ESTIMATION and not results["validation"]["valid"]:
+        return {"error": "Estimate failed validation", "validation": results["validation"]}
     return results
 
 
@@ -2931,7 +3353,7 @@ def compare_human_vs_ai(
     hybrid_time_savings = (pure_human_hrs - hybrid_hrs) / pure_human_hrs * 100
     hybrid_cost_savings = pure_human_cost - hybrid_cost
 
-    return {
+    result = {
         "comparison": "Human vs AI-Assisted Development",
         "inputs": {
             "kloc": kloc,
@@ -2977,6 +3399,14 @@ def compare_human_vs_ai(
         },
         "recommendation": _get_recommendation(kloc, ai_time_savings)
     }
+    result["validation"] = {
+        "pure_human": validate_estimate(pure_human_hrs, pure_human_cost, kloc, typical_rate, workspace_id),
+        "ai_assisted": validate_estimate(ai_assisted_hrs, ai_assisted_cost, kloc, typical_rate, workspace_id),
+        "hybrid": validate_estimate(hybrid_hrs, hybrid_cost, kloc, typical_rate, workspace_id),
+    }
+    if STRICT_ESTIMATION and not all(v["valid"] for v in result["validation"].values()):
+        return {"error": "Estimate failed validation", "validation": result["validation"]}
+    return result
 
 
 def _get_recommendation(kloc: float, ai_savings_pct: float) -> str:
@@ -2999,6 +3429,78 @@ oauth_codes: Dict[str, Dict] = {}
 oauth_tokens: Dict[str, Dict] = {}
 
 
+def _extract_bearer_token(request) -> str:
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        return auth_header.split(" ", 1)[1].strip()
+    return request.headers.get("x-api-key", "") or request.query_params.get("api_key", "")
+
+
+def _is_token_valid(token: str) -> bool:
+    if not token:
+        return False
+    for allowed in MCP_AUTH_TOKENS:
+        if secrets.compare_digest(token, allowed):
+            return True
+    return token in oauth_tokens
+
+
+def _require_auth(request):
+    if not REQUIRE_AUTH:
+        return None
+    token = _extract_bearer_token(request)
+    if not token:
+        return JSONResponse({"error": "unauthorized", "message": "Missing bearer token"}, status_code=401)
+    if not _is_token_valid(token):
+        return JSONResponse({"error": "forbidden", "message": "Invalid token"}, status_code=403)
+    return None
+
+
+def _validate_oauth_client(client_id: str) -> Optional[JSONResponse]:
+    if ALLOWED_OAUTH_CLIENT_IDS and client_id not in ALLOWED_OAUTH_CLIENT_IDS:
+        return JSONResponse({"error": "unauthorized_client"}, status_code=401)
+    return None
+
+
+def _validate_redirect_uri(redirect_uri: str) -> Optional[JSONResponse]:
+    if not redirect_uri:
+        return JSONResponse({"error": "invalid_request", "error_description": "redirect_uri required"}, status_code=400)
+    if not OAUTH_REDIRECT_DOMAINS:
+        return None
+    try:
+        parsed = urllib.parse.urlparse(redirect_uri)
+        host = (parsed.hostname or "").lower()
+    except Exception:
+        return JSONResponse({"error": "invalid_request", "error_description": "Invalid redirect_uri"}, status_code=400)
+    if not any(host == domain.lower() or host.endswith(f".{domain.lower()}") for domain in OAUTH_REDIRECT_DOMAINS):
+        return JSONResponse({"error": "invalid_request", "error_description": "redirect_uri not allowed"}, status_code=400)
+    return None
+
+
+def _ensure_workspace_root():
+    os.makedirs(WORKSPACE_ROOT, exist_ok=True)
+
+
+def _is_safe_path(path: str) -> bool:
+    try:
+        real_path = os.path.realpath(path)
+        root = os.path.realpath(WORKSPACE_ROOT)
+        return os.path.commonpath([real_path, root]) == root
+    except Exception:
+        return False
+
+
+def _is_repo_url_allowed(url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme not in {"https", "http"}:
+        return False
+    host = (parsed.hostname or "").lower()
+    return not ALLOWED_REPO_HOSTS or host in [h.lower() for h in ALLOWED_REPO_HOSTS]
+
+
 async def oauth_metadata(request):
     """OAuth 2.0 Authorization Server Metadata (RFC 8414)."""
     return JSONResponse({
@@ -3017,7 +3519,7 @@ async def oauth_metadata(request):
 
 async def mcp_discovery(request):
     """MCP Server Discovery."""
-    all_tools = audit_server.get_tools() + MEMORY_TOOLS + ANALYSIS_TOOLS + BUSINESS_TOOLS
+    all_tools = filter_tools(audit_server.get_tools() + MEMORY_TOOLS + ANALYSIS_TOOLS + BUSINESS_TOOLS)
     return JSONResponse({
         "name": MCP_SERVER_INFO["name"],
         "version": MCP_SERVER_INFO["version"],
@@ -3056,11 +3558,16 @@ async def oauth_authorize(request):
 
     logger.info(f"OAuth authorize: client_id={client_id}, redirect_uri={redirect_uri}")
 
+    client_error = _validate_oauth_client(client_id)
+    if client_error:
+        return client_error
+
     if response_type != "code":
         return JSONResponse({"error": "unsupported_response_type"}, status_code=400)
 
-    if not redirect_uri:
-        return JSONResponse({"error": "invalid_request", "error_description": "redirect_uri required"}, status_code=400)
+    redirect_error = _validate_redirect_uri(redirect_uri)
+    if redirect_error:
+        return redirect_error
 
     # Generate authorization code (auto-approve)
     auth_code = secrets.token_urlsafe(32)
@@ -3108,15 +3615,22 @@ async def oauth_token(request):
     code_verifier = data.get("code_verifier", "")
 
     logger.info(f"OAuth token: grant_type={grant_type}")
+    client_error = _validate_oauth_client(client_id)
+    if client_error:
+        return client_error
 
     if grant_type == "authorization_code":
         if code not in oauth_codes:
             return JSONResponse({"error": "invalid_grant"}, status_code=400)
 
         code_data = oauth_codes[code]
+        if code_data.get("client_id") and client_id and client_id != code_data["client_id"]:
+            return JSONResponse({"error": "invalid_grant", "error_description": "client_id mismatch"}, status_code=400)
 
         # Verify PKCE
-        if code_data.get("code_challenge") and code_verifier:
+        if code_data.get("code_challenge"):
+            if not code_verifier:
+                return JSONResponse({"error": "invalid_grant", "error_description": "Missing code_verifier"}, status_code=400)
             if code_data.get("code_challenge_method") == "S256":
                 digest = hashlib.sha256(code_verifier.encode()).digest()
                 computed = base64.urlsafe_b64encode(digest).rstrip(b'=').decode()
@@ -3166,6 +3680,8 @@ async def oauth_token(request):
 
 async def oauth_register(request):
     """OAuth 2.0 Dynamic Client Registration."""
+    if ALLOWED_OAUTH_CLIENT_IDS:
+        return JSONResponse({"error": "registration_not_supported"}, status_code=400)
     try:
         data = await request.json()
     except:
@@ -3191,6 +3707,9 @@ async def oauth_register(request):
 
 async def mcp_sse_endpoint(request):
     """SSE endpoint for MCP protocol."""
+    auth_error = _require_auth(request)
+    if auth_error:
+        return auth_error
     session_id = str(uuid.uuid4())
     logger.info(f"MCP SSE: New connection, session={session_id}")
 
@@ -3220,6 +3739,9 @@ async def mcp_sse_endpoint(request):
 
 async def mcp_message_endpoint(request):
     """Handle MCP JSON-RPC messages."""
+    auth_error = _require_auth(request)
+    if auth_error:
+        return auth_error
     try:
         data = await request.json()
     except:
@@ -3233,7 +3755,7 @@ async def mcp_message_endpoint(request):
     logger.info(f"MCP Message: method={method}, session={session_id}")
 
     # Get all tools
-    all_tools = audit_server.get_tools() + MEMORY_TOOLS + ANALYSIS_TOOLS + BUSINESS_TOOLS
+    all_tools = filter_tools(audit_server.get_tools() + MEMORY_TOOLS + ANALYSIS_TOOLS + BUSINESS_TOOLS)
 
     # Handle MCP methods
     if method == "initialize":
@@ -3278,6 +3800,9 @@ async def mcp_message_endpoint(request):
 
 async def mcp_streamable_http(request):
     """Streamable HTTP endpoint for MCP."""
+    auth_error = _require_auth(request)
+    if auth_error:
+        return auth_error
     accept = request.headers.get("accept", "")
 
     if request.method == "GET":
@@ -3296,7 +3821,7 @@ async def mcp_streamable_http(request):
     msg_id = data.get("id")
     params = data.get("params", {})
 
-    all_tools = audit_server.get_tools() + MEMORY_TOOLS + ANALYSIS_TOOLS + BUSINESS_TOOLS
+    all_tools = filter_tools(audit_server.get_tools() + MEMORY_TOOLS + ANALYSIS_TOOLS + BUSINESS_TOOLS)
 
     if method == "initialize":
         result = {
@@ -3345,7 +3870,7 @@ async def homepage(request):
     if request.method == "POST":
         return await mcp_streamable_http(request)
 
-    all_tools = audit_server.get_tools() + MEMORY_TOOLS + ANALYSIS_TOOLS + BUSINESS_TOOLS
+    all_tools = filter_tools(audit_server.get_tools() + MEMORY_TOOLS + ANALYSIS_TOOLS + BUSINESS_TOOLS)
     tool_names = [t["name"] for t in all_tools]
 
     # Get rates for settings
@@ -3358,6 +3883,7 @@ async def homepage(request):
     profiles_options = "".join(f'<option value="{pid}">{p["name"]} ({p["region"]})</option>' for pid, p in PROFILES.items())
     contracts_options = "".join(f'<option value="{cid}">{c["name"]}</option>' for cid, c in CONTRACTS.items())
     templates_options = "".join(f'<option value="{tid}">{tid.replace("_", " ").title()}</option>' for tid in DOCUMENT_TEMPLATES.keys())
+    regions_options = "".join(f'<option value="{rid}">{r["name"]}</option>' for rid, r in rates_data.items())
 
     return HTMLResponse(f'''
 <!DOCTYPE html>
@@ -3540,29 +4066,69 @@ async def homepage(request):
         <div id="audit" class="tab-content">
             <div class="grid-2">
                 <div class="card">
+                    <h2>Preflight Planner</h2>
+                    <div class="form-group">
+                        <label class="form-label">Source (URL or path)</label>
+                        <input type="text" class="form-input" id="preflight-source" placeholder="https://github.com/org/repo or /path/to/repo">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Goal</label>
+                        <select class="form-input" id="preflight-goal">
+                            <option value="">Auto</option>
+                            <option value="overview">Overview</option>
+                            <option value="type">Type</option>
+                            <option value="quality">Quality</option>
+                            <option value="compliance">Compliance</option>
+                            <option value="cost">Cost</option>
+                            <option value="full">Full</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Policy (optional)</label>
+                        <select class="form-input" id="preflight-policy">
+                            <option value="">-- None --</option>
+                            {contracts_options}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Region</label>
+                        <select class="form-input" id="preflight-region">
+                            {regions_options}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Branch</label>
+                        <input type="text" class="form-input" id="preflight-branch" value="main">
+                    </div>
+                    <button class="btn btn-primary" onclick="runPreflight()">Run Preflight</button>
+                    <button class="btn btn-secondary" onclick="runRecommendedAudit()">Run Recommended Audit</button>
+                    <div id="preflight-result" style="margin-top: 16px;"></div>
+                    <div id="audit-result" style="margin-top: 16px;"></div>
+                </div>
+
+                <div class="card">
                     <h2>Cost Estimation</h2>
                     <div class="form-group">
                         <label class="form-label">Lines of Code (LOC)</label>
                         <input type="number" class="form-input" id="audit-loc" value="10000" min="100">
                     </div>
                     <div class="form-group">
-                        <label class="form-label">Profile</label>
-                        <select class="form-input" id="audit-profile">
-                            {profiles_options}
+                        <label class="form-label">Region</label>
+                        <select class="form-input" id="audit-region">
+                            {regions_options}
                         </select>
                     </div>
                     <div class="form-group">
-                        <label class="form-label">Complexity</label>
-                        <select class="form-input" id="audit-complexity">
-                            <option value="S">S - Small (&lt;160h)</option>
-                            <option value="M" selected>M - Medium (160-500h)</option>
-                            <option value="L">L - Large (500-1200h)</option>
-                            <option value="XL">XL - Extra Large (&gt;1200h)</option>
+                        <label class="form-label">Team Experience</label>
+                        <select class="form-input" id="audit-team">
+                            <option value="low">Low</option>
+                            <option value="nominal" selected>Nominal</option>
+                            <option value="high">High</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label class="form-label">Tech Debt Multiplier</label>
-                        <input type="number" class="form-input" id="audit-debt" value="1.0" step="0.1" min="1.0" max="2.0">
+                        <label class="form-label">Tech Debt Score (0-15)</label>
+                        <input type="number" class="form-input" id="audit-debt" value="10" min="0" max="15">
                     </div>
                     <button class="btn btn-primary" onclick="runEstimation()">Calculate Estimate</button>
                     <div id="estimation-result" style="margin-top: 16px;"></div>
@@ -4106,9 +4672,9 @@ REDIS_URL=redis://        # Redis cache (optional)</code></pre>
         // ============== AUDIT TAB FUNCTIONS ==============
         async function runEstimation() {{
             const loc = parseInt(document.getElementById('audit-loc').value);
-            const profile = document.getElementById('audit-profile').value;
-            const complexity = document.getElementById('audit-complexity').value;
-            const debt = parseFloat(document.getElementById('audit-debt').value);
+            const region = document.getElementById('audit-region').value;
+            const team_experience = document.getElementById('audit-team').value;
+            const tech_debt_score = parseInt(document.getElementById('audit-debt').value);
 
             try {{
                 const resp = await fetch('/api/mcp/tool', {{
@@ -4116,25 +4682,132 @@ REDIS_URL=redis://        # Redis cache (optional)</code></pre>
                     headers: {{'Content-Type': 'application/json'}},
                     body: JSON.stringify({{
                         name: 'estimate_cost',
-                        arguments: {{ complexity, profile_id: profile, tech_debt_multiplier: debt }}
+                        arguments: {{ loc, region, team_experience, tech_debt_score }}
                     }})
                 }});
                 const data = await resp.json();
                 if (data.error) {{
                     document.getElementById('estimation-result').innerHTML = `<div class="alert alert-warning">${{data.error}}</div>`;
                 }} else {{
+                    const cost = data.cost || {{}};
                     document.getElementById('estimation-result').innerHTML = `
                         <div class="alert alert-success">
-                            <strong>${{data.profile}}</strong> - ${{complexity}}<br>
+                            <strong>Method:</strong> ${{data.method}}<br>
                             <strong>Hours:</strong> ${{data.hours.min}} - ${{data.hours.max}} (typical: ${{data.hours.typical}})<br>
-                            <strong>Cost:</strong> ${{data.cost.min.toLocaleString()}} - ${{data.cost.max.toLocaleString()}} ${{data.cost.currency}}<br>
-                            <strong>Rate:</strong> $${{data.rate}}/hr
+                            <strong>Cost:</strong> ${{cost.min?.toLocaleString() || 'N/A'}} - ${{cost.max?.toLocaleString() || 'N/A'}} ${{data.currency || ''}}<br>
+                            <strong>Region:</strong> ${{data.region || ''}}
                         </div>
                     `;
                 }}
             }} catch (e) {{
                 document.getElementById('estimation-result').innerHTML = `<div class="alert alert-warning">Error: ${{e.message}}</div>`;
             }}
+        }}
+
+        let lastPreflight = null;
+
+        async function runPreflight() {{
+            const source = document.getElementById('preflight-source').value.trim();
+            const goal = document.getElementById('preflight-goal').value;
+            const policy_id = document.getElementById('preflight-policy').value;
+            const region = document.getElementById('preflight-region').value;
+            const branch = document.getElementById('preflight-branch').value || 'main';
+
+            if (!source) {{
+                alert('Please provide source URL or local path');
+                return;
+            }}
+
+            try {{
+                const resp = await fetch('/api/mcp/tool', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{
+                        name: 'audit_preflight',
+                        arguments: {{
+                            source,
+                            goal: goal || undefined,
+                            policy_id: policy_id || undefined,
+                            region,
+                            branch
+                        }}
+                    }})
+                }});
+                const data = await resp.json();
+                if (data.error) {{
+                    document.getElementById('preflight-result').innerHTML = `<div class="alert alert-warning">${{data.error}}</div>`;
+                    return;
+                }}
+                lastPreflight = data;
+                const snapshot = data.project_snapshot || {{}};
+                const questions = (data.questions || []).map(q => `<li>${{q}}</li>`).join('');
+                document.getElementById('preflight-result').innerHTML = `
+                    <div class="alert alert-info">
+                        <strong>Recommended:</strong> ${{data.recommended_task}}<br>
+                        <strong>Rationale:</strong> ${{data.rationale}}<br>
+                        <strong>LOC:</strong> ${{snapshot.loc || 'N/A'}}<br>
+                        <strong>Languages:</strong> ${{(snapshot.languages || []).join(', ') || 'N/A'}}<br>
+                        ${{questions ? `<strong>Questions:</strong><ul>${{questions}}</ul>` : ''}}
+                    </div>
+                `;
+            }} catch (e) {{
+                document.getElementById('preflight-result').innerHTML = `<div class="alert alert-warning">Error: ${{e.message}}</div>`;
+            }}
+        }}
+
+        async function runRecommendedAudit() {{
+            if (!lastPreflight || !lastPreflight.next_call) {{
+                alert('Run preflight first.');
+                return;
+            }}
+            try {{
+                const resp = await fetch('/api/mcp/tool', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify(lastPreflight.next_call)
+                }});
+                const data = await resp.json();
+                if (data.error) {{
+                    document.getElementById('preflight-result').innerHTML = `<div class="alert alert-warning">${{data.error}}</div>`;
+                    return;
+                }}
+                document.getElementById('preflight-result').innerHTML = `
+                    <div class="alert alert-success">
+                        <strong>Audit completed.</strong> Task: ${{lastPreflight.recommended_task}}
+                    </div>
+                `;
+                renderAuditResult(data);
+            }} catch (e) {{
+                document.getElementById('preflight-result').innerHTML = `<div class="alert alert-warning">Error: ${{e.message}}</div>`;
+            }}
+        }}
+
+        function renderAuditResult(data) {{
+            const payload = data.results ? data : (data.result || data);
+            const results = payload.results || {{}};
+            const outputs = results.outputs || {{}};
+            const summary = outputs.summary || outputs.summary_md || '';
+            const warnings = outputs.warnings || [];
+            const nextSteps = outputs.next_steps || [];
+
+            const summaryHtml = summary ? `<p><strong>Summary:</strong> ${{summary}}</p>` : '';
+            const warningsHtml = warnings.length ? `<p><strong>Warnings:</strong></p><ul>${{warnings.map(w => `<li>${{typeof w === 'string' ? w : (w.description || JSON.stringify(w))}}</li>`).join('')}}</ul>` : '';
+            const nextHtml = nextSteps.length ? `<p><strong>Next Steps:</strong></p><ul>${{nextSteps.map(s => `<li>${{typeof s === 'string' ? s : JSON.stringify(s)}}</li>`).join('')}}</ul>` : '';
+
+            document.getElementById('audit-result').innerHTML = `
+                <div class="alert alert-info">
+                    ${{summaryHtml}}
+                    <p><strong>LOC:</strong> ${{outputs.loc || 'N/A'}} | <strong>Files:</strong> ${{outputs.files || 'N/A'}}</p>
+                    <p><strong>Project Type:</strong> ${{outputs.project_type || 'N/A'}} | <strong>Readiness:</strong> ${{outputs.readiness || 'N/A'}}</p>
+                    <p><strong>Repo Health:</strong> ${{outputs.repo_health || 'N/A'}} | <strong>Compliance:</strong> ${{outputs.compliant || 'N/A'}}</p>
+                    ${{warningsHtml}}
+                    ${{nextHtml}}
+                </div>
+                <details style="margin-top: 8px;">
+                    <summary>Raw result</summary>
+                    <pre style="white-space: pre-wrap; margin-top: 8px;">${{JSON.stringify(payload, null, 2)}}</pre>
+                </details>
+            `;
         }}
 
         async function calculateScores() {{
@@ -4496,7 +5169,7 @@ REDIS_URL=redis://        # Redis cache (optional)</code></pre>
 
 async def health_check(request):
     """Health check endpoint."""
-    all_tools = audit_server.get_tools() + MEMORY_TOOLS + ANALYSIS_TOOLS + BUSINESS_TOOLS
+    all_tools = filter_tools(audit_server.get_tools() + MEMORY_TOOLS + ANALYSIS_TOOLS + BUSINESS_TOOLS)
     return JSONResponse({
         "status": "ok",
         "service": MCP_SERVER_INFO["name"],
@@ -4512,7 +5185,10 @@ async def health_check(request):
 
 async def api_tools(request):
     """List available tools."""
-    all_tools = audit_server.get_tools() + MEMORY_TOOLS + ANALYSIS_TOOLS + BUSINESS_TOOLS
+    auth_error = _require_auth(request)
+    if auth_error:
+        return auth_error
+    all_tools = filter_tools(audit_server.get_tools() + MEMORY_TOOLS + ANALYSIS_TOOLS + BUSINESS_TOOLS)
     return JSONResponse({
         "tools": all_tools,
         "count": len(all_tools)
@@ -4521,6 +5197,9 @@ async def api_tools(request):
 
 async def api_rates(request):
     """Get all rates."""
+    auth_error = _require_auth(request)
+    if auth_error:
+        return auth_error
     workspace_id = request.query_params.get("workspace", "global")
     rates = SettingsManager.get_rates(workspace_id)
     return JSONResponse({
@@ -4531,6 +5210,9 @@ async def api_rates(request):
 
 async def api_settings(request):
     """Get all settings."""
+    auth_error = _require_auth(request)
+    if auth_error:
+        return auth_error
     workspace_id = request.query_params.get("workspace", "global")
     settings = SettingsManager.get_all(workspace_id)
     return JSONResponse(settings)
@@ -4538,6 +5220,9 @@ async def api_settings(request):
 
 async def api_settings_rates(request):
     """Get or update regional rates."""
+    auth_error = _require_auth(request)
+    if auth_error:
+        return auth_error
     workspace_id = request.query_params.get("workspace", "global")
 
     if request.method == "GET":
@@ -4556,6 +5241,9 @@ async def api_settings_rates(request):
 
 async def api_settings_cocomo(request):
     """Get or update COCOMO parameters."""
+    auth_error = _require_auth(request)
+    if auth_error:
+        return auth_error
     workspace_id = request.query_params.get("workspace", "global")
 
     if request.method == "GET":
@@ -4574,6 +5262,9 @@ async def api_settings_cocomo(request):
 
 async def api_settings_ai_productivity(request):
     """Get or update AI productivity settings."""
+    auth_error = _require_auth(request)
+    if auth_error:
+        return auth_error
     workspace_id = request.query_params.get("workspace", "global")
 
     if request.method == "GET":
@@ -4592,6 +5283,9 @@ async def api_settings_ai_productivity(request):
 
 async def api_settings_reset(request):
     """Reset all settings to defaults."""
+    auth_error = _require_auth(request)
+    if auth_error:
+        return auth_error
     workspace_id = request.query_params.get("workspace", "global")
     result = SettingsManager.reset(workspace_id)
     return JSONResponse(result)
@@ -4599,12 +5293,18 @@ async def api_settings_reset(request):
 
 async def api_settings_bounds(request):
     """Get validation bounds."""
+    auth_error = _require_auth(request)
+    if auth_error:
+        return auth_error
     workspace_id = request.query_params.get("workspace", "global")
     return JSONResponse(SettingsManager.get_validation_bounds(workspace_id))
 
 
 async def api_mcp_tool(request):
     """Execute an MCP tool directly from web UI."""
+    auth_error = _require_auth(request)
+    if auth_error:
+        return auth_error
     try:
         data = await request.json()
         tool_name = data.get("name")
@@ -4665,7 +5365,7 @@ def create_app():
     middleware = [
         Middleware(
             CORSMiddleware,
-            allow_origins=['*'],
+            allow_origins=ALLOWED_ORIGINS,
             allow_methods=['*'],
             allow_headers=['*']
         )
@@ -4687,7 +5387,7 @@ if __name__ == "__main__":
     init_postgres()
     init_redis()
 
-    all_tools = audit_server.get_tools() + MEMORY_TOOLS + ANALYSIS_TOOLS + BUSINESS_TOOLS
+    all_tools = filter_tools(audit_server.get_tools() + MEMORY_TOOLS + ANALYSIS_TOOLS + BUSINESS_TOOLS)
 
     logger.info("=" * 60)
     logger.info(f"MCP Audit HTTP Server v{MCP_SERVER_INFO['version']}")

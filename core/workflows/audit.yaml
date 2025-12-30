@@ -50,7 +50,7 @@ inputs:
     default: main
   region:
     type: string
-    default: EU_UA
+    default: ua
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TASK DEPENDENCIES (что запускается для каждой задачи)
@@ -170,6 +170,7 @@ stages:
     inputs:
       path: "{{ stages.load_source.local_path }}"
       languages: "{{ stages.quick_scan.languages }}"
+      structure: "{{ stages.quick_scan.structure }}"
     outputs:
       - repo_health
       - tech_debt
@@ -211,6 +212,7 @@ stages:
       quality: "{{ stages.quality_analysis }}"
       type: "{{ stages.detect_type }}"
       region: "{{ inputs.region }}"
+      team_experience: "nominal"
     outputs:
       - dev_hours_min
       - dev_hours_max

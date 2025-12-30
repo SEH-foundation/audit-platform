@@ -36,14 +36,45 @@ class StaticAnalyzerExecutor(BaseExecutor):
 
     async def run(self, action: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """Route to appropriate method"""
-        if action == "analyze_structure":
+        if action == "quick_scan":
+            return await self.quick_scan(**inputs)
+        elif action == "analyze_structure":
             return await self.analyze_structure(**inputs)
         elif action == "analyze_dependencies":
             return await self.analyze_dependencies(**inputs)
         elif action == "analyze_quality":
             return await self.analyze_quality(**inputs)
+        elif action == "analyze":
+            return await self.analyze(**inputs)
         else:
             raise ValueError(f"Unknown action: {action}")
+
+    async def quick_scan(self, path: str, **kwargs) -> Dict[str, Any]:
+        """Fast scan for files, LOC, and languages."""
+        structure = await self.analyze_structure(path)
+        size_category = self._size_category(structure.get("loc", 0))
+        estimated_scan_time = min(60, max(3, int(structure.get("loc", 0) / 1000)))
+
+        return {
+            "file_count": structure.get("file_count", 0),
+            "loc": structure.get("loc", 0),
+            "languages": structure.get("languages", []),
+            "size_category": size_category,
+            "estimated_scan_time": estimated_scan_time,
+            "structure": structure,
+        }
+
+    async def analyze(self, path: str, languages: list = None, **kwargs) -> Dict[str, Any]:
+        """Composite analysis for structure, dependencies, and quality."""
+        structure = await self.analyze_structure(path)
+        dependencies = await self.analyze_dependencies(path, languages)
+        code_quality = await self.analyze_quality(path, languages)
+
+        return {
+            "structure": structure,
+            "dependencies": dependencies,
+            "code_quality": code_quality,
+        }
 
     async def analyze_structure(self, path: str, **kwargs) -> Dict[str, Any]:
         """Analyze repository structure"""
@@ -69,6 +100,7 @@ class StaticAnalyzerExecutor(BaseExecutor):
         # Check for common files
         has_readme = any((repo_path / name).exists() for name in ["README.md", "README.rst", "README.txt", "README"])
         has_license = any((repo_path / name).exists() for name in ["LICENSE", "LICENSE.md", "LICENSE.txt"])
+        has_docs_folder = any((repo_path / name).exists() for name in ["docs", "doc", "documentation", "wiki"])
         has_tests = any([
             (repo_path / "tests").exists(),
             (repo_path / "test").exists(),
@@ -89,6 +121,13 @@ class StaticAnalyzerExecutor(BaseExecutor):
             (repo_path / "docker-compose.yml").exists(),
             (repo_path / "docker-compose.yaml").exists(),
         ])
+        has_changelog = any((repo_path / name).exists() for name in ["CHANGELOG.md", "CHANGELOG", "HISTORY.md"])
+        has_version_file = any((repo_path / name).exists() for name in ["VERSION", "version.txt", "__version__.py"])
+        has_api_docs = any((repo_path / name).exists() for name in ["api", "api-docs", "openapi", "swagger"])
+
+        readme_meta = self._analyze_readme(repo_path)
+        has_architecture_docs = self._has_architecture_docs(repo_path)
+        dependency_files = self._find_dependency_files(repo_path)
 
         return {
             "file_count": file_count,
@@ -96,9 +135,18 @@ class StaticAnalyzerExecutor(BaseExecutor):
             "languages": languages,
             "has_readme": has_readme,
             "has_license": has_license,
+            "has_docs_folder": has_docs_folder,
+            "readme_has_usage": readme_meta["readme_has_usage"],
+            "readme_has_install": readme_meta["readme_has_install"],
+            "readme_size": readme_meta["readme_size"],
+            "has_architecture_docs": has_architecture_docs,
+            "dependency_files": dependency_files,
             "has_tests": has_tests,
             "has_ci": has_ci,
-            "has_docker": has_docker
+            "has_docker": has_docker,
+            "has_api_docs": has_api_docs,
+            "has_changelog": has_changelog,
+            "has_version_file": has_version_file,
         }
 
     async def analyze_dependencies(self, path: str, languages: list = None, **kwargs) -> Dict[str, Any]:
@@ -163,6 +211,72 @@ class StaticAnalyzerExecutor(BaseExecutor):
                     detected.append(lang)
                     break
         return detected or ["Unknown"]
+
+    def _size_category(self, loc: int) -> str:
+        """Classify repository size by LOC."""
+        if loc < 2000:
+            return "tiny"
+        if loc < 8000:
+            return "small"
+        if loc < 40000:
+            return "medium"
+        if loc < 120000:
+            return "large"
+        return "enterprise"
+
+    def _find_dependency_files(self, repo_path: Path) -> list[str]:
+        """Detect dependency files."""
+        patterns = [
+            "requirements.txt",
+            "pyproject.toml",
+            "setup.py",
+            "Pipfile",
+            "package.json",
+            "yarn.lock",
+            "Cargo.toml",
+            "go.mod",
+            "pom.xml",
+            "build.gradle",
+            "Gemfile",
+            "composer.json",
+        ]
+        return [p for p in patterns if (repo_path / p).exists()]
+
+    def _has_architecture_docs(self, repo_path: Path) -> bool:
+        """Check for architecture/design docs in docs folders."""
+        for doc_dir in ["docs", "doc", "documentation", "wiki"]:
+            base = repo_path / doc_dir
+            if not base.exists():
+                continue
+            for doc in base.rglob("*"):
+                name = doc.name.lower()
+                if "arch" in name or "design" in name:
+                    return True
+        return False
+
+    def _analyze_readme(self, repo_path: Path) -> dict:
+        """Analyze README for usage/install instructions."""
+        readme_path = None
+        for pattern in ["README.md", "README.rst", "README.txt", "README"]:
+            candidate = repo_path / pattern
+            if candidate.exists():
+                readme_path = candidate
+                break
+
+        if not readme_path:
+            return {"readme_has_usage": False, "readme_has_install": False, "readme_size": 0}
+
+        try:
+            content = readme_path.read_text(encoding="utf-8", errors="ignore").lower()
+            usage_keywords = ["usage", "how to use", "getting started", "quick start", "example"]
+            install_keywords = ["install", "installation", "setup", "dependencies", "requirements"]
+            return {
+                "readme_has_usage": any(kw in content for kw in usage_keywords),
+                "readme_has_install": any(kw in content for kw in install_keywords),
+                "readme_size": len(content),
+            }
+        except Exception:
+            return {"readme_has_usage": False, "readme_has_install": False, "readme_size": 0}
 
     def _parse_requirements(self, path: Path) -> list[dict]:
         """Parse Python requirements.txt"""
@@ -284,7 +398,13 @@ class StaticAnalyzerExecutor(BaseExecutor):
         return loc
 
     def get_capabilities(self) -> list[str]:
-        return ["analyze_structure", "analyze_dependencies", "analyze_quality"]
+        return [
+            "quick_scan",
+            "analyze_structure",
+            "analyze_dependencies",
+            "analyze_quality",
+            "analyze",
+        ]
 
 
 def create_executor(config: Dict[str, Any] = None) -> StaticAnalyzerExecutor:

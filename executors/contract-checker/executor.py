@@ -69,7 +69,7 @@ PRODUCT_LEVEL_ORDER = [
 
 
 class ContractCheckerExecutor(BaseExecutor):
-    """Executor for checking contract compliance"""
+    """Executor for checking contract/policy compliance"""
 
     name = "contract-checker"
 
@@ -82,113 +82,46 @@ class ContractCheckerExecutor(BaseExecutor):
 
     async def check(
         self,
-        contract_id: Optional[str],
-        scores: dict,
-        cost: dict,
-        structure: dict,
+        quality: Optional[dict] = None,
+        contract: Optional[dict] = None,
+        policy: Optional[dict] = None,
+        contract_id: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
         Check if project meets contract requirements.
 
         Args:
-            contract_id: Contract template ID or custom requirements
-            scores: Scoring results
-            cost: Cost estimation results
-            structure: Structure analysis results
+            quality: Quality analysis output (scores + structure + security)
+            contract: Parsed contract (document-loader output)
+            policy: Parsed policy (document-loader output)
+            contract_id: Optional template ID fallback
         """
-        if not contract_id:
-            return {
-                "compliant": True,
-                "gaps": [],
-                "requirements_met": 0,
-                "requirements_total": 0,
-                "blockers": [],
-                "warnings": [],
-                "message": "No contract specified"
-            }
+        quality = quality or {}
+        structure = quality.get("structure", {})
+        scores = {
+            "repo_health": quality.get("repo_health", 0),
+            "tech_debt": quality.get("tech_debt", 0),
+            "security_score": quality.get("security_score", 0),
+            "product_level": quality.get("product_level", "Unknown"),
+        }
 
-        # Get contract template
-        template = CONTRACT_TEMPLATES.get(contract_id, CONTRACT_TEMPLATES["standard"])
-        requirements = template["requirements"]
+        contract_result = self._evaluate_document("contract", contract, scores, structure, contract_id)
+        policy_result = self._evaluate_document("policy", policy, scores, structure, None)
 
-        gaps = []
-        blockers = []
-        warnings = []
-        met = 0
-        total = len(requirements)
+        gaps = contract_result["gaps"] + policy_result["gaps"]
+        required_fixes = contract_result["blockers"] + policy_result["blockers"]
 
-        for req_name, req_value in requirements.items():
-            actual = self._get_actual_value(req_name, scores, structure)
-
-            if isinstance(req_value, dict):
-                if "min" in req_value:
-                    # Numeric minimum
-                    required = req_value["min"]
-                    description = req_value.get("description", "")
-
-                    if req_name == "product_level":
-                        # Special handling for product level
-                        if self._compare_product_levels(actual, required):
-                            met += 1
-                        else:
-                            gap = {
-                                "requirement": req_name,
-                                "required": required,
-                                "actual": actual,
-                                "description": description,
-                                "severity": "high"
-                            }
-                            gaps.append(gap)
-                            blockers.append(f"{description}: need {required}, have {actual}")
-                    else:
-                        if actual >= required:
-                            met += 1
-                        else:
-                            gap = {
-                                "requirement": req_name,
-                                "required": required,
-                                "actual": actual,
-                                "gap": required - actual,
-                                "description": description,
-                                "severity": "high" if (required - actual) > 2 else "medium"
-                            }
-                            gaps.append(gap)
-                            if gap["severity"] == "high":
-                                blockers.append(f"{description}: need {required}, have {actual}")
-                            else:
-                                warnings.append(f"{description}: need {required}, have {actual}")
-
-                elif "value" in req_value:
-                    # Boolean requirement
-                    required = req_value["value"]
-                    description = req_value.get("description", "")
-
-                    if actual == required:
-                        met += 1
-                    else:
-                        gap = {
-                            "requirement": req_name,
-                            "required": required,
-                            "actual": actual,
-                            "description": description,
-                            "severity": "high"
-                        }
-                        gaps.append(gap)
-                        blockers.append(f"{description}: missing")
-
-        compliant = len(blockers) == 0
+        total_required = contract_result["required_total"] + policy_result["required_total"]
+        met_required = contract_result["required_met"] + policy_result["required_met"]
+        compliance_percent = round((met_required / total_required) * 100, 1) if total_required > 0 else 100
 
         return {
-            "compliant": compliant,
+            "contract_compliant": contract_result["compliant"],
+            "policy_compliant": policy_result["compliant"],
             "gaps": gaps,
-            "requirements_met": met,
-            "requirements_total": total,
-            "blockers": blockers,
-            "warnings": warnings,
-            "contract_name": template["name"],
-            "compliance_percent": round((met / total) * 100, 1) if total > 0 else 100,
-            "summary": f"{'Compliant' if compliant else 'Non-compliant'}: {met}/{total} requirements met"
+            "required_fixes": required_fixes,
+            "compliance_percent": compliance_percent,
         }
 
     async def list_templates(self) -> Dict[str, Any]:
@@ -224,6 +157,108 @@ class ContractCheckerExecutor(BaseExecutor):
         }
 
         return mappings.get(req_name, None)
+
+    def _evaluate_document(
+        self,
+        source: str,
+        doc: Optional[dict],
+        scores: dict,
+        structure: dict,
+        fallback_template_id: Optional[str],
+    ) -> Dict[str, Any]:
+        """Evaluate a parsed contract/policy or fallback template."""
+        if not doc and not fallback_template_id:
+            return {
+                "compliant": True,
+                "gaps": [],
+                "blockers": [],
+                "required_total": 0,
+                "required_met": 0,
+            }
+
+        requirements = []
+        if doc and doc.get("requirements"):
+            requirements = doc["requirements"]
+        else:
+            template = CONTRACT_TEMPLATES.get(fallback_template_id or "standard")
+            for name, req in template["requirements"].items():
+                requirement = {
+                    "id": name,
+                    "description": req.get("description", name),
+                    "metric": name,
+                    "threshold": req.get("min"),
+                    "operator": ">=" if "min" in req else "==",
+                    "priority": "required",
+                }
+                if "value" in req:
+                    requirement["threshold"] = 1.0 if req["value"] else 0.0
+                requirements.append(requirement)
+
+        gaps = []
+        blockers = []
+        required_total = 0
+        required_met = 0
+
+        for req in requirements:
+            metric = req.get("metric")
+            threshold = req.get("threshold")
+            operator = req.get("operator", ">=")
+            priority = req.get("priority", "required")
+            description = req.get("description", metric)
+
+            if priority == "required":
+                required_total += 1
+
+            actual = self._get_actual_value(metric, scores, structure)
+            if isinstance(actual, bool):
+                actual_value = 1.0 if actual else 0.0
+            else:
+                actual_value = actual if actual is not None else 0.0
+
+            satisfied = True
+            if threshold is not None:
+                if metric == "product_level" and isinstance(threshold, str):
+                    satisfied = self._compare_product_levels(str(actual), threshold)
+                else:
+                    if operator == ">=":
+                        satisfied = actual_value >= threshold
+                    elif operator == "<=":
+                        satisfied = actual_value <= threshold
+                    elif operator == "==":
+                        satisfied = actual_value == threshold
+                    elif operator == ">":
+                        satisfied = actual_value > threshold
+                    elif operator == "<":
+                        satisfied = actual_value < threshold
+
+            if satisfied:
+                if priority == "required":
+                    required_met += 1
+                continue
+
+            gap = {
+                "source": source,
+                "requirement": req.get("id", metric),
+                "metric": metric,
+                "description": description,
+                "required": threshold,
+                "actual": actual_value,
+                "operator": operator,
+                "priority": priority,
+            }
+            gaps.append(gap)
+            if priority == "required":
+                blockers.append(f"{description}: expected {operator} {threshold}, got {actual_value}")
+
+        compliant = required_total == required_met
+
+        return {
+            "compliant": compliant,
+            "gaps": gaps,
+            "blockers": blockers,
+            "required_total": required_total,
+            "required_met": required_met,
+        }
 
     def _compare_product_levels(self, actual: str, required: str) -> bool:
         """Compare product levels"""
