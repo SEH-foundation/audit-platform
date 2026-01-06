@@ -1,4 +1,5 @@
 import AuthBar from "./components/AuthBar";
+import apps from "../data/apps.json";
 import connectors from "../data/connectors.json";
 import tools from "../data/tools.json";
 import links from "../data/links.json";
@@ -9,14 +10,37 @@ export default function Home() {
       <header className="hero">
         <div>
           <p className="eyebrow">SEH Foundation</p>
-          <h1>Connectors Hub</h1>
+          <h1>SEH Platform Hub</h1>
           <p className="subtitle">
-            Internal catalog of MCP connectors, usage instructions, and trusted
-            links. Keep this page updated for the whole team.
+            Standard entry point for platforms, MCP connectors, and trusted
+            operational links.
           </p>
         </div>
         <AuthBar />
       </header>
+
+      <section className="section">
+        <h2>Platforms</h2>
+        <div className="grid">
+          {apps.map((app) => (
+            <article className="card" key={app.id}>
+              <div className="card-header">
+                <h3>{app.name}</h3>
+                <span className={`badge ${app.status}`}>{app.status}</span>
+              </div>
+              <p className="card-desc">{app.description}</p>
+              <div className="meta">
+                <div>
+                  <span className="label">URL</span>
+                  <a href={app.url} target="_blank" rel="noreferrer">
+                    {app.url}
+                  </a>
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
 
       <section className="section">
         <h2>Connectors</h2>

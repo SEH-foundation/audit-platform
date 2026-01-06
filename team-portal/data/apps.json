@@ -1,0 +1,23 @@
+[
+  {
+    "id": "seh-portal",
+    "name": "SEH Connectors Hub",
+    "status": "production",
+    "url": "https://mcp-audit-server.vercel.app",
+    "description": "Unified landing page for connectors, tools, and operational links."
+  },
+  {
+    "id": "seh-audit-status",
+    "name": "Audit Connector Status",
+    "status": "internal",
+    "url": "https://mcp-audit-server.vercel.app/status",
+    "description": "Runtime health checks for audit/connector endpoints."
+  },
+  {
+    "id": "seh-web3-grants-ui",
+    "name": "Web3 Grants Control Room",
+    "status": "production",
+    "url": "https://web3-grants-mcp.vercel.app",
+    "description": "Evidence-first grants operations console."
+  }
+]
