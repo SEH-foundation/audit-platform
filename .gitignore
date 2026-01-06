@@ -40,3 +40,5 @@ data/temp/
 node_modules/
 .next/
 .vercel/
+.vercel
+.env*.local

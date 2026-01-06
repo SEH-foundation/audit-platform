@@ -27,5 +27,50 @@
       "Users: Connect it in Settings → Connectors."
     ],
     "download_url": "https://downloads.seh.foundation/connectors/seh-knowledge-centre.mcpb"
+  },
+  {
+    "id": "seh-web3-grants-mcp",
+    "name": "SEH Web3 Grants MCP",
+    "tier": "production",
+    "owner": "SEH Platform",
+    "url": "https://web3-grants-mcp-production.up.railway.app",
+    "description": "Web3 grants MCP connector (streamable HTTP).",
+    "tags": ["mcp", "grants", "web3"],
+    "instructions": [
+      "Admin: Add connector URL in Claude Admin Settings → Connectors.",
+      "If needed, use /mcp path for streamable HTTP.",
+      "Auth method depends on server policy (token or OAuth)."
+    ],
+    "download_url": "https://downloads.seh.foundation/connectors/seh-web3-grants-mcp.mcpb"
+  },
+  {
+    "id": "seh-ops-agents-mcp",
+    "name": "SEH Ops Agents MCP",
+    "tier": "internal",
+    "owner": "SEH Platform",
+    "url": "https://agents-mcp-production.up.railway.app/mcp",
+    "description": "Operations agents MCP (communicator, documentator, content, project ops).",
+    "tags": ["mcp", "ops", "agents"],
+    "instructions": [
+      "Admin: Add connector URL in Claude Admin Settings → Connectors.",
+      "Use /mcp path for streamable HTTP.",
+      "Auth via OAuth or API keys depending on deployment."
+    ],
+    "download_url": "https://downloads.seh.foundation/connectors/seh-ops-agents-mcp.mcpb"
+  },
+  {
+    "id": "seh-llm-gateway-mcp",
+    "name": "SEH LLM Gateway MCP",
+    "tier": "internal",
+    "owner": "SEH Platform",
+    "url": "https://backoffice-production-ce2b.up.railway.app/mcp",
+    "description": "Unified Anthropic/OpenAI gateway MCP (chat + embeddings).",
+    "tags": ["mcp", "llm", "gateway"],
+    "instructions": [
+      "Admin: Add connector URL in Claude Admin Settings → Connectors.",
+      "Use /mcp path for streamable HTTP.",
+      "Auth via OAuth or API keys depending on deployment."
+    ],
+    "download_url": "https://downloads.seh.foundation/connectors/seh-llm-gateway-mcp.mcpb"
   }
 ]

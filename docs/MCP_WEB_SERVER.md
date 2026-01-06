@@ -15,7 +15,7 @@ HTTP-сервер з SSE транспортом для інтеграції з W
 ### 1. Запуск локально
 
 ```bash
-cd /Users/maksymdemchenko/audit-platform
+cd /Users/maksymdemchenko/MCP_SEH/audit-platform
 python3 -m gateway.mcp.http_server
 ```
 

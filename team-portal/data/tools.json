@@ -57,5 +57,33 @@
       "check_types",
       "find_duplicates"
     ]
+  },
+  "seh-web3-grants-mcp": {
+    "safe": [],
+    "privileged": [],
+    "dangerous": []
+  },
+  "seh-ops-agents-mcp": {
+    "safe": [
+      "communicator_intake",
+      "documentator_run",
+      "content_generate",
+      "ask_platform",
+      "persona_response",
+      "presentation_generate",
+      "channel_send",
+      "repo_sync",
+      "project_manager_task"
+    ],
+    "privileged": [],
+    "dangerous": []
+  },
+  "seh-llm-gateway-mcp": {
+    "safe": [
+      "llm_chat",
+      "llm_embed"
+    ],
+    "privileged": [],
+    "dangerous": []
   }
 }

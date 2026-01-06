@@ -55,7 +55,7 @@ python -m run --source https://github.com/org/repo --task full_audit
     "audit-platform": {
       "command": "python",
       "args": ["-m", "gateway.mcp.server"],
-      "cwd": "/Users/maksymdemchenko/audit-platform"
+      "cwd": "/Users/maksymdemchenko/MCP_SEH/audit-platform"
     }
   }
 }
